@@ -1,0 +1,82 @@
+{
+  "name": "template-be",
+  "version": "1.0.0",
+  "description": "Backend REST API Template (NodeJS, Express, TypeScript, Prisma, PostgreSQL)",
+  "main": "dist/server.js",
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
+    "dev:api": "ts-node-dev --respawn --transpile-only src/api.server.ts",
+    "dev:worker": "ts-node-dev --respawn --transpile-only src/worker.server.ts",
+    "dev:notification": "ts-node-dev --respawn --transpile-only src/notification.server.ts",
+    "dev:media": "ts-node-dev --respawn --transpile-only src/media.server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "start:api": "node dist/api.server.js",
+    "start:worker": "node dist/worker.server.js",
+    "start:notification": "node dist/notification.server.js",
+    "start:media": "node dist/media.server.js",
+    "prisma:generate": "node scripts/prisma-run.js generate",
+    "prisma:studio": "node scripts/prisma-run.js studio",
+    "db:migrate": "node scripts/prisma-run.js migrate dev",
+    "db:migrate:init": "node scripts/prisma-run.js migrate dev --name init",
+    "db:migrate:deploy": "node scripts/prisma-run.js migrate deploy",
+    "db:migrate:reset": "node scripts/prisma-run.js migrate reset",
+    "db:migrate:status": "node scripts/prisma-run.js migrate status",
+    "db:seed": "node scripts/prisma-run.js db seed -- --tsx prisma/seed.ts",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "test": "node --test --test-concurrency=1 --import tsx tests/*.test.ts"
+  },
+  "dependencies": {
+    "@asteasolutions/zod-to-openapi": "^7.3.4",
+    "@aws-sdk/client-s3": "^3.1125.0",
+    "@aws-sdk/s3-request-presigner": "^3.1125.0",
+    "@prisma/client": "^5.22.0",
+    "bcryptjs": "^3.0.3",
+    "bullmq": "^6.3.4",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^4.22.2",
+    "helmet": "^8.3.0",
+    "ioredis": "^6.0.0",
+    "jsonwebtoken": "^9.0.3",
+    "morgan": "^1.12.1",
+    "multer": "^2.4.0",
+    "nodemailer": "^10.0.13",
+    "sharp": "^0.35.4",
+    "swagger-ui-express": "^5.0.1",
+    "uuidv7": "^1.2.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/cookie-parser": "^1.4.10",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^4.17.25",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/morgan": "^1.9.10",
+    "@types/multer": "^2.2.0",
+    "@types/node": "^22.20.0",
+    "@types/nodemailer": "^8.0.1",
+    "@types/swagger-ui-express": "^4.1.8",
+    "eslint": "^9.39.4",
+    "prettier": "^3.9.6",
+    "prisma": "^5.22.0",
+    "ts-node": "^10.9.2",
+    "ts-node-dev": "^2.0.0",
+    "tsx": "^4.23.13",
+    "typescript": "^5.9.3"
+  },
+  "pnpm": {
+    "overrides": {
+      "body-parser": "^1.20.6",
+      "brace-expansion": "^1.1.21",
+      "js-yaml": "^4.3.1",
+      "qs": "^6.16.0"
+    }
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  }
+}

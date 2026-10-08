@@ -1,0 +1,700 @@
+# Project Memory
+
+## Date/time architecture
+
+- `Asia/Ho_Chi_Minh` (UTC+7) là múi giờ chuẩn cho nghiệp vụ tính toán và hiển thị.
+- Các trường ngày nghiệp vụ lưu trữ và định dạng dạng `YYYY-MM-DD` tương thích với PostgreSQL `DATE` hoặc `TIMESTAMP`.
+- Các mốc thời gian tức thời (Auth expirations, created_at, updated_at, token expiry) dùng ISO 8601 offset-aware.
+
+## Quyết định kiến trúc đang có hiệu lực
+
+- **Layered Architecture**: Tuân thủ nghiêm ngặt ranh giới:
+  `route -> validation -> controller -> service -> repository`.
+- **Database Access**: Chỉ repository mới được phép gọi Prisma Client; service phụ trách business logic và transaction orchestration.
+- **Validation**: Toàn bộ HTTP request input bắt buộc đi qua Zod schema middleware (`body`, `query`, `params`).
+- **Error Handling**: API lỗi có chủ đích sử dụng `AppError` kết hợp `ERROR_CODE` trong `src/common/constants/`.
+- **Dynamic RBAC Authorization**:
+  - Phân quyền theo cơ chế động: `User -> Role -> RolePermission -> Permission`.
+  - Middleware bảo vệ endpoint sử dụng `requirePermission('RESOURCE_ACTION')` (hoặc `requireAnyPermission`), không hard-code tên Role trong business authorization.
+  - Tối ưu hóa hiệu năng bằng `PermissionCacheService` (in-memory TTL cache) kèm cơ chế tự động xóa cache khi quyền của vai trò thay đổi.
+  - Bảo vệ System Roles (`isSystem = true` như `ADMIN`, `MANAGER`, `USER` không thể bị xóa/đổi tên) và chống thu hồi quyền quản trị tối cao `ROLE_PERMISSION_ASSIGN` khỏi `ADMIN` (Anti-lockout).
+  - Tự động ghi `AuditLog` cho mọi thao tác tạo/sửa/xóa vai trò, gán quyền và đổi vai trò người dùng.
+- **User Authentication & Authorization**:
+  - JWT Access Token (short-lived, 15m) và Refresh Token (lưu DB trong bảng `refresh_tokens`).
+  - Trả về token và danh sách quyền `permissions: string[]` trong response body JSON (`accessToken`, `refreshToken`) song song với cookie để hỗ trợ Zalo Mini App / WebView client.
+  - Hỗ trợ thiết bị đăng nhập qua `UserDevice` và hash thiết bị (`deviceHash` bằng SHA-256).
+  - Đổi mật khẩu (`updatePassword`) hoặc reset mật khẩu (`resetPassword`) tự động thu hồi (revoke) toàn bộ Refresh Tokens của user.
+- **User Soft Delete & Database Safety**:
+  - Sử dụng `deletedAt`, `deletedBy`, vô hiệu hóa user (`isActive = false`) và thu hồi mọi refresh token.
+  - Quan hệ `Role` -> `User` cấu hình `onDelete: Restrict` để ngăn chặn rủi ro xóa trắng cơ sở dữ liệu người dùng.
+- **Prisma & Migrations**:
+  - Database PostgreSQL quản lý bằng Prisma ORM.
+  - Đã tối ưu hóa `@@index` cho các bảng cốt lõi (`User`, `Tokens`, `RolePermission`, `AuditLog`, `Notifications`).
+  - Đã loại bỏ các bảng cũ của dự án tài chính (`wallets`, `categories`, `transactions`, `budgets`) qua migration `20260822170800_remove_domain_financial_models`.
+  - Sử dụng wrapper `scripts/prisma-run.js` cho các tác vụ Prisma CLI để đảm bảo load đúng biến môi trường từ `.env`.
+  - Mọi thay đổi schema phải sinh migration mới qua `pnpm run db:migrate`. Không chỉnh sửa migration đã được commit/áp dụng.
+  - Tuyệt đối không tự ý chạy `pnpm run db:migrate:reset` trên database đang hoạt động.
+- **Automated Testing**: Bộ test tự động đặt tại `tests/`, chạy bằng lệnh `pnpm test` (`tsx --test`).
+- **Package Manager**: Dự án sử dụng `pnpm`.
+
+- **System Maintenance Mode**:
+  - Module quản lý chế độ bảo trì hệ thống backend tại `src/modules/maintenance/` kết hợp middleware bảo vệ `maintenanceGuard`.
+  - Hỗ trợ các trạng thái `ONLINE`, `MAINTENANCE`, `READ_ONLY` (cho phép `GET`/`HEAD`/`OPTIONS` và chặn mutations với 503).
+  - Trả về mã lỗi chuẩn `503 Service Unavailable` và response body `{ success: false, code: 'SYSTEM_MAINTENANCE', message: '...', data: { title, message, estimatedEndAt, startAt } }`.
+  - Cung cấp API Public `GET /api/v1/maintenance/public` cho các ứng dụng client/frontend truy vấn trạng thái và thời gian hoàn tất.
+  - Phân quyền bypass bằng Dynamic RBAC permissions (`MAINTENANCE_MANAGE`, `MAINTENANCE_BYPASS`), bypass roles (`ADMIN`), và bypass IP whitelists (`bypassIps` hỗ trợ IPv4, IPv6 và dải CIDR subnet như `10.0.0.0/8`, `192.168.1.0/24`).
+  - Cơ chế Anti-Lockout: Tuyệt đối không chặn các endpoint `/health`, `/api/docs`, `/api/v1/auth/(login|refresh|logout|me|sessions)`, và `/api/v1/maintenance/*`.
+  - Tối ưu hóa hiệu năng bằng `MaintenanceCacheService` (in-memory TTL cache) kết hợp **Redis Pub/Sub Cache Invalidation Adapter** (`maintenance:events`) để đồng bộ việc xóa cache tức thời giữa nhiều cluster instances / container pods, kèm cơ chế fallback tự động an toàn khi Redis không khả dụng.
+  - Tự động ghi `AuditLog` cho các hành động `ENABLE_MAINTENANCE`, `UPDATE_MAINTENANCE`, `DISABLE_MAINTENANCE`.
+
+## Trạng thái đã biết
+
+- Các endpoint hiện hữu: `/health`, `/auth` (đăng ký, đăng nhập, refresh, me, logout, password reset, verification, sessions), `/users` (quản trị người dùng), `/rbac` (quản trị vai trò, phân quyền, nhật ký kiểm toán audit log), `/notifications` (thông báo & email queue), `/maintenance` (quản trị bảo trì hệ thống).
+- Cơ sở dữ liệu sạch chuẩn template với các migration `20260722073204_`, `20260822152200_dynamic_rbac`, `20260822164800_notification_system`, `20260822170800_remove_domain_financial_models`, `20260822173600_add_maintenance_and_audit_index`.
+- Cấu hình port: fallback code là `8888` (hoặc `7777` theo `.env.example`).
+- Tài liệu Swagger UI tại `/api/docs`.
+
+- **Advanced SSRF Defense & URL Validation** (`src/common/helpers/url.helper.ts`):
+  - `isPrivateOrReservedIp(ip)`: Phát hiện mọi địa chỉ IPv4/IPv6 private (10.x, 172.16-31.x, 192.168.x, 169.254.x, CGN 100.64-127.x, Loopback 127.x, ULA fc00::/7, Link-local fe80::/10, Multicast ff00::/8, và IPv4-mapped IPv6 `::ffff:127.0.0.1` / `::ffff:169.254.169.254`).
+  - `resolveAndValidateDns(hostname, options)`: Phân giải toàn bộ bản ghi DNS A & AAAA, chống tấn công **DNS Rebinding** và domain public trỏ về IP private.
+  - `resolveSafeRedirectChain(urlString, options)`: Theo dõi và xác thực từng bước chuyển hướng **HTTP 301/302/303/307/308 redirect** (tối đa 5 redirects), chặn mọi hành vi chuyển hướng sang private IP, metadata IP, protocol không an toàn (`file:`, `ftp:`, `javascript:`), hoặc redirect loop.
+  - `isPublicHttpUrl(url, options)`: Validate cú pháp URL, tự động cho phép localhost trong môi trường `development` (`allowPrivate: true`) và chặn nghiêm ngặt trong `production`.
+  - Đã gắn vào Zod validation schema cho `avatarUrl` (`auth.validation.ts`) và `actionUrl` (`notification.validation.ts`).
+  - Unit tests đầy đủ tại `tests/helpers.test.ts` (102 tests pass).
+- **Multi-Tier Rate Limiting & RFC 6585 Standard** (`src/middlewares/rate-limit.middleware.ts`):
+  - Factory `createRateLimiter` sliding-window in-memory kèm cơ chế dọn dẹp định kỳ không rò rỉ bộ nhớ.
+  - Trả về đầy đủ HTTP Headers: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset` và `Retry-After` (khi chạm 429).
+  - `rateLimitMiddleware`: Áp dụng toàn cục `/api/v1` (1000 req/15 phút).
+  - `authRateLimitMiddleware`: Áp dụng riêng cho các endpoint nhạy cảm `/register`, `/login`, `/forgot-password`, `/reset-password`, `/resend-verification` (30 req/15 phút) để phòng chống Brute Force và Credential Stuffing.
+  - Định nghĩa mã lỗi tập trung `ERROR_CODE.RATE_LIMIT_EXCEEDED`.
+- **CORS Production Fail-Safe** (`src/config/env.config.ts`):
+  - Bắt buộc khai báo danh sách domain cụ thể qua `ALLOWED_ORIGINS` khi chạy `NODE_ENV=production`.
+  - Cấm sử dụng wildcard `'*'` hoặc bỏ trống trong môi trường production để bảo vệ cookie/credentials.
+- **Dynamic System Configuration & Feature Flags** (`src/modules/system-config/`):
+  - Module quản lý cấu hình động và cờ tính năng (Feature Flags) tại `/api/v1/system/configs`, `/api/v1/system/features/:key/toggle` và endpoint công khai `/api/v1/system/public`.
+  - Phân loại theo danh mục: `GENERAL`, `FEATURE_FLAG`, `INTEGRATION`, `SECURITY`.
+  - Hỗ trợ đánh giá cờ tính năng tức thời `systemConfigService.isFeatureEnabled(flagKey)` kèm middleware bảo vệ route `requireFeatureFlag('flagKey')`.
+  - Tối ưu hóa hiệu năng bằng in-memory TTL caching kết hợp Redis Pub/Sub invalidation (`system_config:events`) và tự động ghi `AuditLog` cho mọi thao tác cấu hình.
+- **Production Observability & Deep Diagnostics** (`src/routes/health.route.ts` & `src/middlewares/request-id.middleware.ts`):
+  - Middleware `requestIdMiddleware` tự động cấp phát và chuyển tiếp header `X-Request-Id` (UUID) phục vụ truy vết phân tán (distributed tracing).
+  - Cung cấp `/api/v1/health` (liveness) và `/api/v1/health/readiness` (thực hiện truy vấn kiểm tra PostgreSQL database live, kiểm tra ping Redis, thu thập thông số heapUsedMb, heapTotalMb, rssMb và uptime).
+- **Graceful Shutdown & Resilience** (`src/server.ts`):
+  - Xử lý tín hiệu `SIGINT` / `SIGTERM` an toàn: đóng HTTP listener, dừng background workers (`EmailWorker`, `WebhookWorker`), đóng BullMQ queue, ngắt kết nối Redis và Prisma client, kèm failsafe timeout 10 giây.
+- **Strict Layer Encapsulation & Worker Concurrency**:
+  - Toàn bộ Middlewares (`apiKeyAuthMiddleware`, `permissionMiddleware`), Services (`PermissionCacheService`, `MaintenanceCacheService`, `NotificationDispatcher`, `EmailTemplateService`) và Workers (`EmailWorker`, `WebhookWorker`) truy vấn cơ sở dữ liệu độc quyền qua các Repository (`IntegrationRepository`, `AuthRepository`, `UserRepository`, `RbacRepository`, `MaintenanceRepository`, `NotificationRepository`, `SystemConfigRepository`).
+  - `EmailWorker` áp dụng cơ chế khóa hàng nguyên tử `FOR UPDATE SKIP LOCKED` (`NotificationRepository.claimPendingEmails`), triệt tiêu hoàn toàn race condition duplicate email khi chạy multi-pod cluster.
+  - `rotateRefreshToken()` áp dụng RFC 6819 Token Family Revocation: tự động thu hồi toàn bộ refresh token của user khi phát hiện hành vi tái sử dụng token đã xoay vòng.
+  - Tối ưu hóa `api_keys.last_used_at` với cơ chế debounce 5 phút tránh nghẽn write lock khi tiếp nhận tải cao.
+  - Tối ưu hóa composite indexes qua migration `20260824010000_update_notification_indexes`.
+- **Automated OpenAPI & Swagger Documentation** (`@asteasolutions/zod-to-openapi`):
+  - Tài liệu Swagger UI tại `/api/docs` được sinh tự động và đồng bộ 100% theo thời gian thực từ các Zod Schema trong `*.validation.ts`.
+  - Loại bỏ hoàn toàn việc duy trì file tĩnh thủ công 1900 dòng.
+  - Mỗi module quản lý OpenAPI route definitions độc lập tại `src/modules/*/*.openapi.ts`, tập trung qua `OpenAPIRegistry` (`src/config/openapi/openapi.registry.ts`).
+- **Scheduled Background Tasks & Cron Engine** (`BullMQ Repeatable Jobs`):
+  - Module quản lý Cron Jobs tập trung tại `src/modules/cron/` và `src/common/queues/cron.queue.ts`.
+  - Hỗ trợ 4 tác vụ định kỳ chính:
+    1. `cleanup-audit-logs`: Xóa Audit Logs cũ hơn 30 ngày.
+    2. `cleanup-unconfirmed-uploads`: Quét bucket Cloudflare R2 / S3 xóa file avatar rác quá 24h không liên kết user.
+    3. `cleanup-expired-tokens`: Dọn dẹp Refresh Token, Verification Token và Password Reset Token đã hết hạn.
+    4. `daily-summary-digest` & `weekly-summary-digest`: Tổng hợp KPI hệ thống và gửi email báo cáo tới Quản trị viên.
+  - Cung cấp REST endpoints `GET /api/v1/cron/jobs` và `POST /api/v1/cron/jobs/:jobName/trigger` cho phép Admin chủ động kích hoạt chạy ngay kèm Audit Log.
+  - **PATCH /api/v1/cron/jobs/:jobName/toggle**: Toggle enable/disable cron job động không cần restart. Trạng thái được lưu in-memory (`Map<CronJobName, boolean>` trong `CronService`) — tất cả jobs mặc định `true` khi khởi động. Khi toggle, gọi `cronQueue.enableJobScheduler`/`disableJobScheduler` và ghi `AuditLog` với action `TOGGLE_CRON_JOB`.
+  - `CronJobItemDto` có thêm trường `isEnabled: boolean` phản ánh trạng thái hiện tại từ in-memory store.
+  - Quản lý lifecycle an toàn qua `CronWorker` và `CronQueueService` trong `src/server.ts`.
+  - **enableJobScheduler/disableJobScheduler**: API mới bật/tắt cron job động không cần restart; `registerSchedules(disabledJobs[])` skip job khi khởi động.
+
+- **Security Hardening (2026-09-01)**:
+  - **Token Hashing SHA-256**: `auth.repository.ts` băm SHA-256 toàn bộ token trước khi lưu DB (`refresh_tokens`, `verification_tokens`, `password_reset_tokens`). Breaking change — token cũ plain-text không tìm được sau deploy. `auth.service.ts → getActiveSessions()` so sánh hash.
+  - **optionalAuthMiddleware**: Middleware mới trong `auth.middleware.ts` — parse JWT nếu có, bỏ qua nếu sai/thiếu. Dùng cho API public cần context user.
+  - **Permission Middleware DB Validation**: Truy vấn DB kiểm tra `isActive` và `deletedAt` trong mỗi request có permission check, chống JWT cũ khi user bị khóa/hạ role. API Key bypass.
+  - **XSS Email Protection**: `escapeHtml()` trong `template.helper.ts`; áp dụng vào `verifyEmail`, `resetPassword`, `newDeviceAlert` trong `email-template.service.ts`.
+  - **hashToken() public helper**: Thêm vào `crypto.helper.ts` để dùng ở các module khác nếu cần.
+  - **R2 listObjects pagination**: Vòng lặp `ContinuationToken` xử lý bucket > 1000 objects.
+  - **Redis .connect()**: `maintenance-cache.service.ts` gọi `.connect()` tường minh sau khởi tạo.
+  - **Slug P2002 Error**: `error.middleware.ts` trả thông báo slug riêng biệt thân thiện.
+  - **Payload Limit**: `app.ts` giới hạn `512kb` chống DoS payload.
+  - **CORS Trailing Slash**: Normalize origin trước khi so sánh `allowedOrigins`.
+  - **REDIS_URL Parser**: `env.config.ts` hỗ trợ cloud Redis URL (`redis://`, `rediss://`).
+- **Full Project Audit & Autonomous Remediation (2026-09-01)**:
+  - **XSS & HTML Injection in MailService**: Áp dụng `escapeHtml()` trong `src/common/services/mail.service.ts` cho toàn bộ template email trực tiếp (`sendVerificationEmail`, `sendPasswordResetEmail`, `sendNewDeviceAlertEmail`).
+  - **UUID Normalization for Email Notifications**: Chuẩn hóa `userId` thành `null` nếu không đúng chuẩn UUID trong `notification.repository.ts` (`createSingleEmailNotification`, `createManyEmailNotifications`, `createMultiChannelNotifications`), tránh crash runtime PostgreSQL khi dispatch email không kèm user ID.
+  - **User State Caching in PermissionCacheService**: Bổ sung in-memory TTL cache (60s) `getUserState(userId)` trong `PermissionCacheService` và sử dụng trong `permission.middleware.ts`, triệt tiêu điểm nghẽn 1 DB query trên mọi request authenticated. Tự động xóa cache khi user bị cập nhật, soft-delete, hoặc gán vai trò mới.
+  - **Prisma JSON Array Containment Filter**: Chuẩn hóa `channels: { array_contains: channel }` trong `NotificationRepository.findTemplates`.
+  - **Distributed Tracing in Error Handler**: Bổ sung `X-Request-Id` vào log lỗi 500 của `error.middleware.ts` phục vụ trace log trên production.
+  - **Database Indexing**: Thêm `@@index([toEmail])` vào model `EmailNotification` trong `prisma/schema.prisma`.
+  - **User Management Schemas Enhancement**: Mở rộng `createUserSchema`, `updateUserSchema`, DTOs và `UserService` hỗ trợ cập nhật `fullName` và `phoneNumber`.
+  - **Defensive Date Boundary Guard**: Thêm regex validation `/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/` trong `getVietnamDayRange`.
+- **Dependencies Upgrade & Security Audit Hardening (2026-09-03)**:
+  - **Core Upgrades**: Nâng cấp an toàn lên các phiên bản ổn định mới nhất: `express` (4.22.2), `zod` (3.25.76), `bcryptjs` (3.0.3), `bullmq` (6.3.4), `dotenv` (17.4.2), `helmet` (8.3.0), `@aws-sdk/client-s3` và `@aws-sdk/s3-request-presigner` (3.1125.0), `cors` (2.8.6), `jsonwebtoken` (9.0.3), `morgan` (1.12.0), `multer` (2.3.0), `nodemailer` (9.1.1), `sharp` (0.35.4).
+  - **DevDependencies Upgrades**: Nâng cấp `typescript` (5.9.3), `eslint` (9.39.4), `prettier` (3.9.6), `tsx` (4.23.13), `@types/node` (22.20.0), `@types/express` (4.17.25) cùng các types liên quan; gỡ bỏ `@types/bcryptjs` do `bcryptjs@3.0.3` đã tích hợp native types.
+  - **Framework Preservation**: Giữ nguyên `Express 4.x`, `Prisma 5.22.0` và `@asteasolutions/zod-to-openapi` 7.3.4 để bảo đảm tính tương thích kiến trúc tuyệt đối.
+  - **Security Overrides**: Bổ sung `pnpm.overrides` cho `qs` (^6.16.0), `body-parser` (^1.20.6), `brace-expansion` (^1.1.18), `js-yaml` (^4.3.1), đưa `pnpm audit` về `0 vulnerabilities`.
+- **Enterprise Standard Hardening (2026-09-03)**:
+  - **Dockerfile Multi-Stage Non-Root**: Tạo mới `Dockerfile` chuẩn production tại thư mục gốc. Sử dụng 3-stage build (`deps` → `builder` → `runner`) trên `node:22-alpine`. Stage runner chỉ chứa production artifacts (`dist/`, `prisma/`, prod `node_modules`); chạy dưới user `node` (uid=1000, non-root); sử dụng `tini` làm PID 1 để xử lý SIGTERM/SIGINT đúng cách và chống zombie process. Docker Compose service `app` đã được bình luận sẵn, sẵn sàng bật khi cần.
+  - **Zod Env Config Fail-Fast**: Chuyển đổi `src/config/env.config.ts` từ validation thủ công (IIFE/throw) sang Zod schema (`envSchema`) với `safeParse(process.env)`. Server thoát `process.exit(1)` với thông báo lỗi rõ ràng ra stderr ngay khi thiếu / sai biến môi trường bắt buộc (`DATABASE_URL`). Giữ nguyên 100% interface `envConfig` (cùng key, cùng kiểu dữ liệu) — toàn bộ consumer (`src/app.ts`, `src/server.ts`, workers, middlewares) không bị thay đổi. Bổ sung thêm `as const` để TypeScript suy luận type chính xác hơn. Các ràng buộc production (`JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `ALLOWED_ORIGINS`, `ENCRYPTION_KEY`) được giữ lại qua các `.refine()` trong Zod schema. Build `pnpm build` và `pnpm run lint` đều pass `0 errors / 0 warnings`.
+- **User Self-Deactivation with Email Verification (2026-09-03)**:
+  - Triển khai trọn vẹn tính năng người dùng tự vô hiệu hóa tài khoản (chuẩn GDPR "Right to be Forgotten" & Self-Service) qua 2 endpoint: `POST /api/v1/auth/deactivate/request` và `POST /api/v1/auth/deactivate/confirm`.
+  - **Re-Authentication**: Yêu cầu người dùng nhập mật khẩu hiện tại khi gửi yêu cầu để chống chiếm đoạt phiên (session hijacking).
+  - **Anti-Lockout Protection**: Ngăn chặn tài khoản `ADMIN` duy nhất còn lại trong hệ thống tự vô hiệu hóa (kiểm tra cả ở bước request và confirm).
+  - **Cryptographic Token Isolation**: Token xác nhận được băm SHA-256 kèm prefix cách ly `sha256('deactivate:' + token)` lưu trong `verification_tokens`, ngăn chặn triệt để lỗ hổng Type Confusion giữa token đăng ký và token vô hiệu hóa mà không cần migration database.
+  - **Hạn dùng 15 phút**: Token tự động hết hạn và dọn dẹp sau 15 phút.
+  - **Immediate RTR Revocation**: Khi xác nhận thành công, Prisma `$transaction` cập nhật `isActive: false`, `deletedAt: new Date()`, `deletedBy: userId`, xóa toàn bộ `refresh_tokens`, xóa token và giải phóng bộ nhớ đệm `permissionCacheService.invalidateUser(userId)`.
+  - **Giao tiếp & Kiểm toán**: Gửi email cảnh báo màu đỏ (`MailService.sendAccountDeactivationEmail`) kèm mã/link xác nhận, tự động ghi `AuditLog` cho cả 2 hành động (`REQUEST_ACCOUNT_DEACTIVATION`, `CONFIRM_ACCOUNT_DEACTIVATION`).
+  - **OpenAPI & Testing**: Đăng ký đầy đủ OpenAPI 3.0 trong `auth.openapi.ts` và bao phủ 12 test cases tự động trong `tests/auth-deactivation.test.ts` (100% pass, 0 regressions).
+- **Two-Factor Authentication (2FA / TOTP) (2026-09-03)**:
+  - Triển khai hoàn chỉnh tính năng Xác thực 2 bước (2FA) theo thuật toán TOTP chuẩn RFC 6238 / RFC 4226 tương thích với mọi Authenticator Apps (Google Authenticator, Microsoft Authenticator, Authy, 1Password).
+  - **Zero External Dependencies**: Thuật toán sinh khóa Base32, HMAC-SHA1 và dynamic truncation được cài đặt thuần túy bằng `node:crypto` trong `src/common/helpers/totp.helper.ts`.
+  - **Secret Encryption At-Rest**: Khóa bí mật TOTP được mã hóa đối xứng AES-256-GCM (`encryptSecret` / `decryptSecret`) trước khi lưu vào cột `two_factor_secret` của bảng `users`.
+  - **Single-Use Backup Recovery Codes**: Sinh 8 mã dự phòng khẩn cấp dạng `xxxx-xxxx`, lưu mảng băm SHA-256 trong cột `two_factor_backup_codes` (JSONB). Mỗi mã chỉ được sử dụng duy nhất một lần (xóa khỏi mảng ngay khi dùng thành công).
+  - **Timing-Safe Comparison & Window Drift**: Áp dụng `crypto.timingSafeEqual` chống Timing Attack và cho phép bù lệch giờ $\pm 30$ giây ($window = 1$).
+  - **Login Challenge & Isolated Temp Token**: Khi đăng nhập với tài khoản đã bật 2FA, API trả về `{ requires2FA: true, tempToken }` (hạn 5 phút, purpose `2FA_VERIFICATION`), không phát hành cookie hoặc token chính thức cho đến khi qua được endpoint `POST /api/v1/auth/2fa/verify`.
+  - **5 API Endpoints & Rate Limiting**:
+    1. `POST /api/v1/auth/2fa/setup` (authMiddleware)
+    2. `POST /api/v1/auth/2fa/enable` (authMiddleware, authRateLimitMiddleware)
+    3. `POST /api/v1/auth/2fa/verify` (authRateLimitMiddleware)
+    4. `POST /api/v1/auth/2fa/disable` (authMiddleware, authRateLimitMiddleware)
+    5. `POST /api/v1/auth/2fa/backup-codes/regenerate` (authMiddleware, authRateLimitMiddleware)
+  - **Session Invalidation & Anti-Hijacking (Cách 1)**: Khi người dùng Bật 2FA (`enable2FA`) hoặc Tắt 2FA (`disable2FA`), hệ thống tự động gọi `revokeOtherSessions(userId, currentRefreshToken)` để xóa toàn bộ refresh token của các thiết bị/trình duyệt khác trong CSDL và giải phóng bộ nhớ đệm quyền (`permissionCacheService.invalidateUser`). Phiên làm việc trên thiết bị hiện tại được bảo lưu nguyên vẹn, trong khi tất cả phiên cũ/bị chiếm đoạt trên các máy khác sẽ lập tức bị đá văng và buộc phải đăng nhập lại từ đầu qua thử thách 2FA.
+  - **Database Migration**: `prisma/migrations/20260903000000_add_user_two_factor/migration.sql` bổ sung 3 cột tùy chọn (`two_factor_enabled`, `two_factor_secret`, `two_factor_backup_codes`) vào bảng `users`, bảo đảm tương thích ngược 100%.
+  - **OpenAPI 3.0 & Testing**: Tự động sinh tài liệu Swagger UI và bảo đảm bởi 29 automated test cases (12 unit tests trong `tests/totp-helper.test.ts` và 17 integration tests trong `tests/auth-2fa.test.ts`, 100% pass, build và lint 0 warnings/errors).
+- **Google OAuth2 Login & Account Linking (2026-09-04)**:
+  - Triển khai toàn diện tính năng đăng nhập và liên kết tài khoản bằng Google OAuth2 (Google Sign-In button, One-Tap, Mobile App credentials, và standard OAuth2 redirect code flow).
+  - **Zero External Dependencies**: Giao tiếp trực tiếp với các endpoint chính thức của Google (`oauth2.googleapis.com/tokeninfo` và `oauth2.googleapis.com/token`) qua native `fetch` của Node.js 22, triệt tiêu phụ thuộc các thư viện nặng và rủi ro chuỗi cung ứng.
+  - **Zero 2FA Bypass**: Nếu tài khoản liên kết Google đã kích hoạt Two-Factor Authentication (`twoFactorEnabled === true`), hệ thống bắt buộc chuyển sang thử thách 2FA (`requires2FA: true, tempToken: ...`), ngăn chặn hoàn toàn việc bypass 2FA thông qua social login.
+  - **Auto Email Activation & Account Linking**:
+    - Khi đăng nhập lần đầu với Google: tự động tạo user mới với vai trò mặc định `USER` và liên kết `UserSocial(provider='GOOGLE', providerUserId=sub)`.
+    - Khi user đã tồn tại qua email thông thường: tự động liên kết tài khoản mạng xã hội `UserSocial` và kích hoạt tài khoản (`isActive = true`) nếu user trước đó chưa kích hoạt email.
+    - Chặn đăng nhập đối với tài khoản đã bị soft-deleted (`deletedAt !== null`).
+  - **Centralized Constants & Clean Layering**:
+    - Quản lý nhà cung cấp tập trung qua `AUTH_PROVIDER.GOOGLE` (`src/common/constants/auth.constant.ts`).
+    - Ghi nhận Audit Log tập trung cho cả 2 hành động: `LOGIN_GOOGLE` và `LINK_SOCIAL_ACCOUNT`.
+    - Định nghĩa mã lỗi tập trung `ERROR_CODE.GOOGLE_AUTH_FAILED`.
+  - **2 Endpoints & Rate Limiting**:
+    1. `GET /api/v1/auth/google/url`: Sinh Google OAuth2 authorization URL với `clientId`, `redirectUri`, `state`.
+    2. `POST /api/v1/auth/google`: Đăng nhập/liên kết tài khoản với `idToken` hoặc `{ code, redirectUri }`, áp dụng `authRateLimitMiddleware` (30 req/15 phút).
+  - **OpenAPI 3.0 & Testing**: Tự động sinh Swagger documentation tại `/api/docs` và bao phủ 21 automated test cases trong `tests/auth-google.test.ts` (100% pass, zero regressions, build và lint 0 errors).
+- **Profile Social Account Management & Anti-Lockout Defense (2026-09-04)**:
+  - Bổ sung 3 APIs chuyên dụng quản lý liên kết tài khoản mạng xã hội cho trang cá nhân (Profile Settings) theo chuẩn layered architecture:
+    1. `GET /api/v1/auth/social` (`authMiddleware`): Lấy danh sách các tài khoản mạng xã hội đang liên kết của người dùng hiện tại (ID, provider, providerUserId, email, name, avatar, createdAt).
+    2. `POST /api/v1/auth/social/link` (`authMiddleware`, `authRateLimitMiddleware`): Chủ động liên kết tài khoản Google mới với tài khoản đang đăng nhập qua `idToken` hoặc `{ code, redirectUri }`.
+       - **Collision Guard**: Kiểm tra tài khoản Google đã liên kết với người dùng nào khác trong hệ thống chưa (`findUserSocialByProvider`). Nếu đã liên kết với user khác, chặn lại ngay với mã lỗi `409 Conflict` (`ERROR_CODE.DUPLICATE_ENTRY`).
+       - Tự động ghi `AuditLog` với action `LINK_SOCIAL_ACCOUNT`.
+    3. `DELETE /api/v1/auth/social/:provider` (`authMiddleware`, `authRateLimitMiddleware`): Hủy liên kết tài khoản mạng xã hội khỏi tài khoản người dùng.
+       - **Strict Anti-Lockout Defense**: Nếu người dùng đăng ký ban đầu thuần túy qua Google (`user.password === null`) và chỉ có duy nhất 1 tài khoản mạng xã hội (`countUserSocialAccounts <= 1`), hệ thống từ chối hủy liên kết với `400 Bad Request` (`ERROR_CODE.VALIDATION_ERROR`) kèm thông báo yêu cầu thiết lập mật khẩu trước khi hủy liên kết để ngăn chặn nguy cơ người dùng tự khóa vĩnh viễn tài khoản của chính mình.
+       - Tự động ghi `AuditLog` với action `UNLINK_SOCIAL_ACCOUNT`.
+  - **Database Migration & Seeding**: Đã chạy triển khai toàn bộ 11 migrations qua `pnpm run db:migrate:deploy` và nạp seed dữ liệu mẫu qua `pnpm run db:seed` thành công trên môi trường Supabase PostgreSQL mới.
+  - **Automated Verification**: Mở rộng `tests/auth-google.test.ts` thêm 10 bài test tích hợp và kiểm thử OpenAPI; toàn bộ 232 automated tests trên toàn dự án đều pass 100%, TypeScript build và ESLint sạch 0 warnings / 0 errors.
+
+- **OAuth Redirect URI Security Hardening (2026-09-16)**:
+  - **Lỗ hổng đã vá**: Hệ thống trước đây cho phép client tự do truyền bất kỳ `redirectUri` nào (Open Redirect / OAuth Authorization Code Leakage). Attacker có thể sinh URL OAuth trỏ sang domain họ kiểm soát.
+  - **Giải pháp**: Áp dụng **exact-match allowlist** (không contains, không prefix, không wildcard) tại 3 điểm: `getGoogleAuthUrl()`, `googleLogin()`, `linkSocialAccount()` trong `auth.service.ts`.
+  - **`validateGoogleRedirectUri(uri)`** trong `src/common/helpers/google-auth.helper.ts`: Hàm trung tâm kiểm tra allowlist, ném `AppError 403` nếu URI không khớp.
+  - **Env Var `GOOGLE_OAUTH_ALLOWED_REDIRECT_URIS`** (comma-separated): Bắt buộc khai báo trong production (fail-fast tại `env.config.ts`). Development không khai báo → fallback về localhost dev URI mặc định.
+  - **Constant `GOOGLE_OAUTH_DEFAULT_DEV_REDIRECT_URI`** trong `src/common/constants/auth.constant.ts`: URI mặc định cho dev fallback.
+  - **Cloud Network Resilience & Multi-Tier Email Dispatch Pipeline (2026-09-24)**:
+  - **DNS IPv4 Resolution Enforcement (`ipv4first`)**: Cấu hình `dns.setDefaultResultOrder('ipv4first')` tại `src/server.ts` và `src/common/services/mail.service.ts`, kết hợp lọc bỏ IPv6 interfaces trong `nodemailer/lib/shared` và chỉ định `family: 4` trong nodemailer transport để triệt tiêu lỗi mạng `ENETUNREACH` trên các cloud platforms (Render, Railway, Docker) không có IPv6 gateway.
+  - **Multi-Tier Fallback Dispatch Pipeline**:
+    1. **Tầng 1 (Ưu tiên)**: Gửi qua **Resend HTTPS REST API** (Port 443 không bao giờ bị chặn trên Cloud) qua `RESEND_API_KEY`.
+    2. **Tầng 2**: Gửi qua **Mail Webhook Relay** (Port 443 e.g. Google Apps Script / Custom Relay) qua `MAIL_WEBHOOK_URL`.
+    3. **Tầng 3**: Gửi qua **SMTP trực tiếp** qua IPv4 với timeout ngắn (`connectionTimeout: 4000ms`, `greetingTimeout: 4000ms`, `socketTimeout: 5000ms`) và tự động retry trên alternative port (587 <-> 465) nếu gặp lỗi kết nối.
+  - **Non-blocking Auth Email Dispatch**: Trong `src/modules/auth/auth.service.ts`, bọc `try...catch` cho toàn bộ tác vụ gửi mail (`register`, `forgotPassword`, `resendVerification`, `requestDeactivate`) và non-blocking alert (`sendNewDeviceAlertEmail`) để sự cố mạng SMTP không làm gián đoạn luồng người dùng (chặn 500 Internal Server Error).
+  - **Console Fallback & Dev Logs**: Tự động in link xác thực, reset password và mã OTP ra `console.warn` khi chạy ở môi trường chưa cấu hình mail (`!mailConfig.isConfigured`) hoặc khi dispatch thất bại để dev/staging không bị gián đoạn.
+  - **Cloud Domain Auto-Detection**: `mailConfig.appUrl` tự động nhận diện `RENDER_EXTERNAL_URL` khi deploy trên Render thay vì dùng nhầm `http://localhost:7777`.
+  - **Automated Verification**: Bổ sung bộ test tự động tại `tests/mail-pipeline.test.ts` (11/11 tests pass, 289/289 toàn dự án pass 100%, TypeScript build và ESLint sạch 0 warnings / 0 errors).
+- **Database Architecture: UUIDv7 & B-Tree Index Optimization (2026-09-24)**:
+  - **UUIDv7 Standard (RFC 9562)**: Chuyển đổi toàn bộ khóa chính từ `@default(uuid())` (UUIDv4 ngẫu nhiên) sang `@default(dbgenerated("uuid_generate_v7()"))` trong `prisma/schema.prisma` cho toàn bộ 18 models.
+  - **PostgreSQL PL/pgSQL Function**: Migration `prisma/migrations/20260918000000_init_uuidv7/migration.sql` định nghĩa hàm `uuid_generate_v7()` sử dụng extension `pgcrypto`. Đã xử lý triệt để lỗi uninitialized bytea concatenation (`unix_ts_ms = substring(...)` trước khi nối chuỗi bytea `uuid_bytes = unix_ts_ms || ...`), gán version 7 (`0111`) và variant 1 (`10`).
+  - **Helper `src/common/helpers/uuid.helper.ts`**: Cung cấp hàm `uuidv7()` và alias `generateId()` sử dụng thư viện `uuidv7` theo chuẩn RFC 9562, bảo đảm tính đơn điệu (monotonic time-ordered) và thân thiện tuyệt đối với cấu trúc chỉ mục B-tree.
+  - **Index Hygiene & Overhead Reduction**: Loại bỏ các index đơn lẻ trên foreign key (`users_role_id_idx`, `role_permissions_role_id_idx`) vì đã được bao phủ hoàn toàn bởi các composite indexes (`users_role_id_is_active_deleted_at_idx` và unique constraint `role_permissions_role_id_permission_id_key`), giảm đáng kể overhead I/O đĩa và dung lượng index.
+  - **Interactive Transaction Timeout Guard**:
+    - Định nghĩa hằng số tập trung `DEFAULT_TRANSACTION_OPTIONS = { maxWait: 10000, timeout: 15000 } as const` trong `src/database/prisma.client.ts`.
+    - Áp dụng vào toàn bộ interactive transactions tại các repository (`AuthRepository`, `RbacRepository`, `NotificationRepository`) để ngăn chặn triệt để lỗi transaction timeout mặc định 5s của Prisma khi hệ thống chịu tải cao hoặc chịu độ trễ mạng đám mây.
+  - **Automated Verification**: Bổ sung bộ test tự động tại `tests/uuid-helper.test.ts` (4/4 tests pass, 293/293 tests toàn bộ test suite pass 100%, TypeScript compilation và ESLint sạch 0 warnings / 0 errors).
+- **Production Hardening & Security Standards (2026-09-24)**:
+  - **Fail-fast Secret Check trên Production**: Trong `src/config/env.config.ts`, khi `NODE_ENV === 'production'`, bắt buộc `JWT_ACCESS_SECRET` và `JWT_REFRESH_SECRET` không được để mặc định và phải có độ dài tối thiểu 32 ký tự, ném ngoại lệ (`throw new Error`) dừng khởi động server ngay lập tức nếu vi phạm.
+  - **Chống IP Whitelist Spoofing trong API Key Middleware**: Trong `src/middlewares/api-key.middleware.ts`, trích xuất client IP từ `req.ip || req.socket?.remoteAddress` và strip prefix `::ffff:` thay vì tin tưởng trực tiếp header `x-forwarded-for` do client tự gửi lên.
+  - **Chống rò rỉ JWT qua Query String**: Trong `src/middlewares/auth.middleware.ts`, chặn hoàn toàn việc nhận `?token=` ở các API thông thường (ném `AppError 400 VALIDATION_ERROR` để tránh rò rỉ trong web proxy log và browser history), chỉ cho phép `req.query.token` / `req.query.ticket` đối với các endpoint SSE (`/stream`) và direct download (`/download`).
+  - **Bảo mật Cloudflare Wrangler**: Tạo `wrangler.toml` không chứa connection string mật khẩu rõ; chuyển cấu hình biến bí mật sang file template `.dev.vars.example` và đưa `.dev.vars` vào `.gitignore`.
+  - **Tăng payload size**: Trong `src/app.ts`, nâng giới hạn `express.json({ limit: '50mb' })` và `express.urlencoded({ extended: true, limit: '50mb' })` đáp ứng nhu cầu upload file và backup dữ liệu dung lượng lớn.
+  - **Graceful Shutdown**: Trong `src/server.ts`, lắng nghe `SIGTERM` và `SIGINT`, tự động đóng idle HTTP connections (`server.closeIdleConnections()`), đóng HTTP server, dừng song song BullMQ workers (`webhookWorker`, `cronWorker`) và `emailWorker`, ngắt kết nối Queues, Redis Caches và Prisma Client với cơ chế watchdog timeout 10 giây.
+  - **Automated Verification**: Bao phủ 6 test cases mới trong `tests/production-hardening.test.ts` (299/299 tests toàn dự án pass 100%, build `pnpm build` và `pnpm run lint` sạch 0 warnings / 0 errors).
+- **Validation, Param Schemas & Pagination Standardization (2026-09-24)**:
+  - **Bắt ZodError tập trung (RFC 7807 / 422)**:
+    - Trong `src/middlewares/error.middleware.ts`, xử lý `error instanceof ZodError` trả về HTTP 422 chuẩn: `{ success: false, message: "Validation failed", code: "VALIDATION_ERROR", errors: [{ field: "...", message: "..." }] }`.
+    - Đồng bộ `validate.middleware.ts` ném `AppError("Validation failed", 422, ERROR_CODE.VALIDATION_ERROR, formattedErrors)` để đảm bảo tính nhất quán trên toàn bộ ứng dụng.
+  - **Bổ sung Param Schemas (UUID & Route Key)**:
+    - Trong `src/common/validations/common.validation.ts`: bổ sung `routeKeySchema`, `createRouteKeyParamSchema`, `standardKeyParamSchema` để validate các route key cho cấu hình hệ thống, cờ tính năng (`/^[a-z0-9_.-]+$/i`, min 2, max 100).
+    - Cập nhật `configKeyParamSchema` và `configIdParamSchema` trong `src/modules/system-config/system-config.validation.ts`.
+  - **Chuẩn hóa Pagination**:
+    - Tạo `src/common/types/pagination.type.ts` (`PaginationMeta`: `{ page, limit, total, totalPages }`) và `src/common/helpers/pagination.helper.ts` (`calculatePaginationSkip`, `formatPaginationMeta`).
+    - Thống nhất toàn bộ repository (`UserRepository`, `SystemConfigRepository`, `RbacRepository`, `IntegrationRepository`, `NotificationRepository`) về định dạng 1-indexed page (mặc định 1), giới hạn `limit` trong khoảng 1 đến 100 (mặc định 20), và luôn trả về `PaginationMeta` (`page`, `limit`, `total`, `totalPages`).
+  - **Automated Verification**: Bao phủ 8 test cases trong `tests/validation-pagination.test.ts` (307/307 tests toàn dự án pass 100%, build `pnpm build` và ESLint sạch 0 warnings / 0 errors).
+- **Clean Architecture & Open-Code-Review Remediation (2026-09-24)**:
+  - Đã khắc phục triệt để **13 vấn đề kiến trúc và mã nguồn** trên toàn bộ thư mục `src/`:
+    1. **Critical 1 (Health Layer Boundary)**: Tạo module 5 lớp độc lập `src/modules/health/` (`dto`, `repository`, `service`, `controller`, `route`, `openapi`), xóa bỏ hoàn toàn file cũ `src/routes/health.route.ts` và `health.openapi.ts`.
+    2. **Critical 2 (Email Verification Atomicity)**: `activateUserAndDeleteToken` bọc `prisma.$transaction([ user.update, verificationToken.delete ])` nguyên tử trong `AuthRepository`.
+    3. **Critical 3 (2FA Session Revocation Atomicity)**: Bổ sung `enable2FAAndRevokeOtherSessions` và `disable2FAAndRevokeOtherSessions` dùng Prisma `$transaction` nguyên tử.
+    4. **Critical 4 (Sensitive Data Filtering)**: Sử dụng `sessionSelect` và `deviceSelect` trong `UserRepository`, và `apiKeySelect` trong `IntegrationRepository` để chủ động loại bỏ token hash và `keyHash` ở mức database query.
+    5. **High 5 (Repository vs Service Separation)**: Gỡ `AppError` và logic HTTP khỏi `AuthRepository.rotateRefreshToken`; chuyển thẩm quyền kiểm tra và ném `AppError(..., 401, ERROR_CODE.TOKEN_INVALID)` về `AuthService`.
+    6. **High 6 (Centralized User Domain)**: Chuyển toàn bộ truy vấn `User` chéo từ `RbacRepository` và `NotificationRepository` về tập trung tại `UserRepository`.
+    7. **High 7 (Cron Error Standardization)**: `CronService.executeJobNow` ném `AppError(..., 400, ERROR_CODE.VALIDATION_ERROR)` cho unsupported job name thay vì `new Error`.
+    8. **High 8 (NotificationDispatcher Error Standardization)**: Ném `AppError(..., 400, ERROR_CODE.VALIDATION_ERROR)` khi thiếu channel payload.
+    9. **High 9 (HTTP Boundary Validation for Refresh Token)**: Thêm `refreshSchema = z.object({ refreshToken: z.string().min(1) })`, middleware `populateRefreshToken` tại route, loại bỏ kiểm tra thủ công trong `AuthController`.
+    10. **Medium 10 (Elimination of Magic Strings)**: Chuẩn hóa toàn bộ string literals thành hằng số tập trung: `EMAIL_STATUS.SENT`, `EMAIL_STATUS.PENDING`, `NOTIFICATION_PRIORITY.NORMAL`, `SYSTEM_CONFIG_CATEGORY.GENERAL`.
+    11. **Medium 11 (Audit Log Error Visibility)**: Thay `.catch(() => {})` trong `IntegrationService` thành `.catch((err) => console.warn("[AuditLog] Failed to record event:", err?.message || err))`.
+    12. **Medium 12 (Safe Controller Typing)**: Sử dụng generic Express `Request<unknown, unknown, unknown, UserQueryDto>` trong `UserController.findAll` thay cho ép kiểu kép `as unknown as`.
+    13. **Medium 13 (Prisma WhereInput Type-Safety)**: Thay `any` bằng `Prisma.NotificationTemplateWhereInput` trong `NotificationRepository.findTemplates`.
+  - **Automated Verification**: `pnpm build` (tsc 0 lỗi), `pnpm run lint` (0 warning/error), `pnpm exec prisma validate` (hợp lệ), và `pnpm test` (307/307 tests pass 100%).
+- **Security Audit & OWASP Top 10 Hardening (SEC-01 to SEC-06) (2026-09-24)**:
+  - **SEC-01 (Critical - CWE-532 Console Token Leakage)**: Trong `src/common/services/mail.service.ts`, import `envConfig` và bọc toàn bộ fallback / dev mode `console.warn(...)` in token/link xác thực, reset password, cảnh báo thiết bị, vô hiệu hóa tài khoản và OTP trong điều kiện `if (envConfig.nodeEnv !== "production")`. Tuyệt đối không log dữ liệu nhạy cảm ra console trên môi trường production.
+  - **SEC-02 (High - CWE-285 Vertical Hierarchy Protection)**:
+    - Trong `src/modules/users/user.controller.ts`: Truyền `req.user?.id` vào `this.service.update(req.params.id, body, req.user?.id)`.
+    - Trong `src/modules/users/user.service.ts`: Bổ sung kiểm tra thẩm quyền thứ bậc trong cả `update` và `softDelete`. Nếu người dùng mục tiêu là tài khoản quản trị viên (`isAdministrativeUser(existing)`), bắt buộc actor thực hiện thao tác cũng phải là tài khoản quản trị viên (`isAdministrativeUser(actor)`); nếu không phải, ném `AppError 403 Forbidden`.
+  - **SEC-03 (High - CWE-269 Privilege Escalation & Self-Promotion)**: Trong `src/modules/rbac/rbac.service.ts` hàm `assignUserRole`:
+    - Chặn tự thay đổi vai trò bản thân: Ném `AppError 400 Validation Error` khi `context.actorId === userId`.
+    - Chặn người dùng không phải Quản trị viên tự ý cấp vai trò Quản trị viên: Kiểm tra nếu vai trò mục tiêu là Admin (`targetRole.name === ROLES.ADMIN` hoặc sở hữu quyền quản trị then chốt), bắt buộc người thực hiện thao tác (`context.actorId`) phải có vai trò Quản trị viên; nếu không, ném `AppError 403 Forbidden`.
+  - **SEC-04 (Medium - CWE-307 Rate Limiting on Sensitive Auth Routes)**: Trong `src/modules/auth/auth.route.ts`, bổ sung `authRateLimitMiddleware` cho 2 endpoint nhạy cảm: `POST /refresh` (chống brute force token refresh / replay flood) và `POST /2fa/setup` (chống spam sinh secret và QR code).
+  - **SEC-05 (Medium - CWE-20 API Key Permission Validation)**: Trong `src/modules/integration/integration.validation.ts`, validate chặt chẽ từng phần tử trong mảng `permissions` của `createApiKeySchema` đối chiếu với tập hợp các quyền hợp lệ `PERMISSIONS` từ `src/common/constants/permission.constant.ts`.
+  - **SEC-06 (Low - CWE-400 DoS Body Parser Limit Hardening)**: Trong `src/app.ts`, hạ giới hạn toàn cục `express.json({ limit: "2mb" })` và `express.urlencoded({ limit: "2mb" })` từ 50MB xuống 2MB để bảo vệ bộ nhớ backend chống tấn công từ chối dịch vụ (DoS).
+  - **Automated Verification**: Bổ sung Suite 27 trong `tests/audit-remediation.test.ts` (6 test cases mới), toàn bộ test suite đạt **313/313 tests pass 100%**, `pnpm run build` (tsc 0 lỗi), `pnpm run lint` (0 warning/error), và `pnpm exec prisma validate` thành công rực rỡ.
+
+- **Phase 1: User Lifecycle & Identity Security Hardening (2026-09-25)**:
+  - **1. User Restore (`POST /api/v1/users/:id/restore`)**:
+    - Bổ sung quyền `USER_RESTORE` và hỗ trợ `requirePermission(PERMISSIONS.USER_DELETE)` cho phép Quản trị viên phục hồi người dùng bị xóa mềm (`deletedAt = null`, `deletedBy = null`, `isActive = true`).
+    - Chống lỗi phục hồi sai trạng thái: Ném `AppError 400 BAD_REQUEST` nếu người dùng chưa bị xóa mềm.
+    - Bảo vệ phân cấp chiều dọc (Vertical Hierarchy): Non-admin không được khôi phục tài khoản Admin.
+    - Invalidate cache phân quyền tức thời qua `permissionCacheService.invalidateUser(id)`.
+    - Ghi nhận `AuditLog` với `action: RESTORE_USER`.
+    - Hỗ trợ lọc danh sách người dùng đã xóa qua query param `isDeleted=true` trong `GET /api/v1/users`.
+  - **2. Account Lockout Protection (OWASP ASVS Standard)**:
+    - Bổ sung 2 trường `failedLoginAttempts` (Int, default 0) và `lockedUntil` (DateTime?) vào model `User` qua migration `20260925150000_add_user_lockout_and_password_policy`.
+    - Khi đăng nhập sai mật khẩu: Tăng số lần thử thất bại và phản hồi số lần thử còn lại (ví dụ "Bạn còn X lần thử trước khi tài khoản bị khóa").
+    - Khi sai liên tiếp 5 lần: Khóa tài khoản tạm thời 15 phút, trả về HTTP 423 với mã lỗi `ACCOUNT_LOCKED` và tự động ghi `AuditLog` `ACCOUNT_LOCKED`.
+    - Chặn tức thì mọi nỗ lực đăng nhập trong thời gian bị khóa mà không thực hiện kiểm tra mật khẩu.
+    - Tự động reset `failedLoginAttempts: 0` và `lockedUntil: null` khi đăng nhập đúng hoặc khi đặt lại mật khẩu.
+  - **3. Admin Force Password Reset & Must Change Password Policy**:
+    - Bổ sung trường `mustChangePassword` (Boolean, default false) vào model `User`.
+    - API `POST /api/v1/users/:id/reset-password`: Cho phép Quản trị viên đặt lại mật khẩu với mật khẩu chỉ định hoặc tự sinh ngẫu nhiên tạm thời (trả về trong response), đồng thời thu hồi mọi Refresh Token đang hoạt động và đặt `mustChangePassword = true`.
+    - Vertical hierarchy guard: Non-admin không có quyền đặt lại mật khẩu cho tài khoản Quản trị viên.
+    - Ghi nhận `AuditLog` với `action: ADMIN_RESET_PASSWORD`.
+    - `POST /login` và `GET /me` trả về cờ `mustChangePassword: true` để Frontend điều hướng người dùng tới màn hình bắt buộc đổi mật khẩu.
+    - Sau khi người dùng đổi mật khẩu thành công qua `PUT /auth/password`, cờ `mustChangePassword` tự động được xóa về `false`.
+  - **Automated Verification**:
+    - Tạo mới test suite `tests/user-lifecycle-security.test.ts` (17 test cases).
+    - Toàn bộ test suite đạt **330/330 tests pass 100%**, `pnpm build` (tsc 0 lỗi), `pnpm run lint` (0 error/warning), và `pnpm exec prisma validate` thành công.
+- **Phase 1 Code Review & Security Hardening Remediation (2026-09-25)**:
+  - **1. Transaction Array Return Unwrapping**: `UserRepository.adminResetPassword` destructure `[user]` từ `prisma.$transaction`, sửa lỗi vỡ response body object `{ "0": user, "1": { count: 0 } }`.
+  - **2. Sensitive Column Exclusion**: `UserRepository.findWithDeleted` chuyển sang `select: userSelect`, loại bỏ hoàn toàn việc nạp `password`, `twoFactorSecret`, `twoFactorBackupCodes` vào bộ nhớ.
+  - **3. Account Lockout DoS Prevention**: Trong `AuthService.login`, khi `user.lockedUntil <= new Date()`, reset biến đếm lần thử từ 0 (`isLockoutExpired`), cấp lại đủ 5 lần thử cho người dùng sau khi hết hạn khóa thay vì khóa lại ngay sau 1 lần sai.
+  - **4. Permission Synchronization**: `POST /api/v1/users/:id/restore` sử dụng `requireAnyPermission(PERMISSIONS.USER_RESTORE, PERMISSIONS.USER_DELETE)` kích hoạt quyền chuyên dụng `USER_RESTORE`.
+  - **5. Auth Repository State Hygiene**: `updatePassword` và `updatePasswordAndRevokeTokens` trong `AuthRepository` reset `failedLoginAttempts: 0, lockedUntil: null`.
+  - **6. Password Length Boundary**: `adminResetPasswordSchema` bổ sung `.max(100)` phòng chống tấn công DoS CPU băm bcrypt.
+  - **7. Clean Type System**: Xóa bỏ `(user as any)` trong `AuthService`, cập nhật `UserResponseDto` và `AdminResetPasswordResponseDto`.
+- **Phase 2: Files & Media Storage Module & Dynamic System Config (2026-09-25)**:
+  - **1. Database Architecture & Schema**:
+    - Thêm model `FileRecord` vào `prisma/schema.prisma` và migration `20260925160000_add_file_records`.
+    - Quan hệ với model `User`: `user User? @relation(fields: [userId], references: [id], onDelete: SetNull)` kèm `fileRecords FileRecord[]`.
+    - Chỉ mục tối ưu: `@@index([userId, isPublic])`, `@@index([folder, isPublic])`, `@@index([isConfirmed, createdAt])`, `@@index([deletedAt])`.
+    - Cơ chế Soft Delete: `delete(id)` trong `FileRepository` cập nhật `deletedAt: new Date()` đồng bộ với kiến trúc kiểm toán audit trail của template.
+  - **2. Security, Presigned URLs & Dynamic System Configuration**:
+    - Tích hợp động 4 khóa cấu hình lưu trữ vào `systemConfigService` (`src/common/constants/system-config.constant.ts`):
+      1. `storage.max_file_size_mb` (100MB): Giới hạn kích thước tệp tải lên tối đa.
+      2. `storage.allowed_mime_types` (Allowlist MIME types): Hỗ trợ wildcard (`image/*`, `video/*`, tài liệu Office, PDF, CSV, audio).
+      3. `storage.upload_expires_seconds` (300s): Thời hạn link presigned upload PUT.
+      4. `storage.download_expires_seconds` (3600s): Thời hạn link presigned download GET.
+    - Cấu hình được public qua `GET /api/v1/system/public` phục vụ client-side validation trên frontend / mobile app / mini app.
+    - Download URL an toàn chuẩn RFC 6266 / RFC 5987: Thiết lập `Content-Disposition` với tên tệp ASCII fallback kết hợp `filename*=UTF-8''` hỗ trợ tên file tiếng Việt có dấu.
+    - Chống tải tệp rác: `getPresignedDownloadUrl` từ chối các tệp chưa được xác nhận tải lên (`isConfirmed = false`).
+    - Chống xác nhận trùng & thao túng kích thước: `confirmUpload` từ chối tệp đã confirm trước đó (`400 BAD_REQUEST`) và kiểm tra quyền sở hữu chặt chẽ.
+  - **3. Access Control & Privacy Protection (OWASP API3:2023 - BOLA/IDOR Hardened)**:
+    - Bảo vệ thông tin nhạy cảm: `fileSelect` trong `FileRepository` chỉ trả về `{ id, fullName }` của tác giả tải lên, loại bỏ hoàn toàn `email` trên các tệp công khai để chống thu thập email trái phép.
+    - Phân quyền chính xác: Tách biệt rạch ròi quyền quản trị tối cao `FILE_MANAGE` khỏi các quyền cơ sở của người dùng (`FILE_READ`, `FILE_UPLOAD`, `FILE_DELETE`). Người dùng có `FILE_READ` chỉ được xem file public và file do chính mình sở hữu; người dùng có `FILE_DELETE` chỉ được xóa file của chính mình. Chỉ tài khoản có `FILE_MANAGE` mới có toàn quyền xem/tải/xóa tệp của người dùng khác.
+    - Khách vãng lai chưa xác thực khi truy cập tệp riêng tư trả về chuẩn mã lỗi `401 UNAUTHORIZED` (thay vì 403) theo đúng chuẩn ngữ nghĩa RESTful.
+    - Route Guarding: Áp dụng `requireAnyPermission` ngay tại biên HTTP (`file.route.ts`) cho `POST /upload-url` (`FILE_UPLOAD`/`FILE_MANAGE`) và `DELETE /:id` (`FILE_DELETE`/`FILE_MANAGE`).
+    - Khắc phục lỗi ghi đè `OR` trong Prisma Query: `FileRepository.findAll` gom toàn bộ điều kiện truy vấn vào mảng `AND: conditions`, bảo đảm bộ lọc phân quyền người dùng không bị xóa bỏ khi truyền tham số tìm kiếm `search`.
+    - Bảo vệ hạn mức tải lên hai lớp: Cả `requestUploadUrl` và `confirmUpload` đều bắt buộc kiểm tra đối chiếu dung lượng tệp với giá trị động `storage.max_file_size_mb` từ `systemConfigService`.
+  - **4. OpenAPI 3.0 Documentation & Standard Routing**:
+    - Module độc lập `src/modules/files/` tuân thủ nghiêm ngặt 5 layer: `route -> validation -> controller -> service -> repository`.
+    - Đồng bộ 100% tài liệu Swagger OpenAPI 3.0 tại `/api/docs` khớp chuẩn với `FileResponseDto`, `UploadUrlResponseDto`, `DownloadUrlResponseDto` và mã trạng thái HTTP thực tế (201 cho upload-url, 200 cho confirm/find/download-url, 302 cho download).
+  - **5. Automated Testing & Verification**:
+    - Bộ test suite `tests/file-storage.test.ts` (24 test cases) bao quát 100% các tình huống xác thực, phân quyền (matrix role USER vs MANAGER/ADMIN), cấu hình hệ thống động, soft delete, MIME validation, tìm kiếm an toàn và audit log.
+    - Toàn bộ test suite dự án đạt **356/356 tests pass 100%**.
+    - `pnpm build` (tsc 0 lỗi), `pnpm run lint` (0 error/warning), `pnpm exec prisma validate` thành công rực rỡ.
+- **Phase 3: PostgreSQL Full-Text Search (tsvector, tsquery & GIN Indexes) (2026-09-25)**:
+  - **1. Database Architecture & GIN Index Migrations**:
+    - Tạo migration SQL bất biến `20260925170000_add_full_text_search_gin_indexes`.
+    - Thêm 3 chỉ mục GIN (Generalized Inverted Index) chuyên dụng trên PostgreSQL:
+      1. `idx_users_fts`: `to_tsvector('simple', coalesce(full_name, '') || ' ' || coalesce(email, '') || ' ' || coalesce(phone_number, ''))`
+      2. `idx_file_records_fts`: `to_tsvector('simple', coalesce(original_name, '') || ' ' || coalesce(file_name, '') || ' ' || coalesce(folder, ''))`
+      3. `idx_audit_logs_fts`: `to_tsvector('simple', coalesce(action, '') || ' ' || coalesce(target_type, '') || ' ' || coalesce(ip_address, '') || ' ' || coalesce(user_agent, ''))`
+    - Cấu hình dictionary `'simple'` đảm bảo giữ nguyên token tiếng Việt, email, filename, số điện thoại, hỗ trợ tốt dữ liệu đa ngôn ngữ.
+  - **2. Security & Sanitization (`src/common/helpers/fts.helper.ts`)**:
+    - `sanitizeFtsInput`: Giữ lại chữ cái Unicode (hỗ trợ tiếng Việt đầy đủ), chữ số, dấu gạch dưới, gạch ngang và dấu chấm. Vô hiệu hóa và loại bỏ hoàn toàn các ký tự điều khiển cú pháp tsquery (`!`, `&`, `|`, `(`, `)`, `:`, `*`, `<`, `>`, `'`, `"`, `\`, `~`, `/`), chuỗi comment SQL (`--`) và dấu chấm phẩy (`;`), phòng chống triệt để SQL Injection & Syntax Crash.
+    - `buildTsQuery`: Hỗ trợ prefix search (`'word':* & 'word':*`), exact match và OR search cho live-search / autocomplete.
+    - `normalizeSearchTerm`: Chuẩn hóa chuỗi và kiểm tra khoảng trắng an toàn.
+  - **3. Repository Integration & Relevance Ranking (`ts_rank`)**:
+    - `UserRepository`:
+      - Nâng cấp `findAll` nhận tham số `search` kết hợp mảng `AND: conditions` an toàn, tìm kiếm trên `fullName`, `email`, `phoneNumber`.
+      - Bổ sung `searchFts(query)`: Truy vấn raw an toàn qua `prisma.$queryRaw` với `Prisma.sql` parameterized template tag, tính toán điểm số xếp hạng liên quan `ts_rank` đưa kết quả sát nhất lên đầu.
+    - `FileRepository`:
+      - Nâng cấp `findAll` tìm kiếm theo `originalName`, `fileName`, `folder`.
+      - Bổ sung `searchFts(query, currentUserId, canManageAll)`: Tìm kiếm toàn văn bản với GIN index + `ts_rank`, bảo vệ nghiêm ngặt ranh giới phân quyền sở hữu tệp tin.
+    - `RbacRepository`:
+      - Nâng cấp `findAllAuditLogs` nhận tham số `search` tìm kiếm trên `action`, `targetType`, `ipAddress`, `userAgent`.
+      - Bổ sung `searchAuditLogsFts(query)`: Tìm kiếm nhanh qua GIN index phục vụ tra cứu kiểm toán hiệu năng cao.
+  - **4. DTO, Validation & OpenAPI Synchronization**:
+    - Bổ sung `search?: string` vào `UserQueryDto` (`findAllUserSchema`), `AuditLogQueryDto` (`auditLogQuerySchema`), và `FileQueryDto` (`listFilesSchema`).
+    - Chuẩn hóa validation chống DoS: áp dụng `.trim().max(100)` cho `search` trên toàn bộ schemas (`findAllUserSchema`, `auditLogQuerySchema`, `listFilesSchema`).
+    - Tự động đồng bộ các tham số tìm kiếm vào tài liệu OpenAPI Swagger tại `/api/docs`.
+  - **5. Strict Layer Integration & Service Routing**:
+    - Tích hợp điều phối tìm kiếm FTS ở tầng Service theo đúng chuẩn kiến trúc `route -> validation -> controller -> service -> repository`:
+      - `UserService.findAll`: Tự động gọi `repository.searchFts(query)` khi có `query.search`, fallback về `findAll` khi không có từ khóa tìm kiếm.
+      - `FileService.listFiles`: Tự động gọi `repository.searchFts(query, userId, canManageAll)` khi có `query.search`, fallback về `findAll`.
+      - `RbacService.findAllAuditLogs`: Tự động gọi `repository.searchAuditLogsFts(query)` khi có `query.search`, fallback về `findAllAuditLogs`.
+    - Hỗ trợ Dependency Injection trong constructor của `UserService` và `RbacService` phục vụ kiểm thử đơn vị độc lập.
+    - Sửa lỗi lọc thời gian trong `RbacRepository.searchAuditLogsFts`: Bổ sung xử lý `startDate` và `endDate` trong `whereConditions`.
+    - Nâng cấp `src/common/helpers/fts.helper.ts`: Hỗ trợ `@` trong `sanitizeFtsInput` bảo tồn nguyên vẹn lexeme email PostgreSQL và bổ sung nhánh phrase search `<->` trong `buildTsQuery`.
+    - Đồng bộ hóa câu query `countResult` trong `FileRepository.searchFts` với `LEFT JOIN users u ON f.user_id = u.id`.
+  - **6. Automated Testing & Verification**:
+    - Mở rộng test suite `tests/full-text-search.test.ts` (26 test cases) bao quát sanitization, email preservation, phrase mode `<->`, DoS max length, và Service layer delegation routing.
+    - Toàn bộ automated test suite đạt **382/382 tests pass 100%**.
+    - `pnpm build` (tsc 0 lỗi), `pnpm run lint` (0 error/warning), `pnpm exec prisma validate` thành công rực rỡ.
+
+- **Phase 4: Cloudflare Turnstile (Anti-Bot & CAPTCHA Defense) (2026-10-01)**:
+  - **1. Zero External Dependencies & High Resilience**:
+    - Giao tiếp trực tiếp với Cloudflare Siteverify API (`https://challenges.cloudflare.com/turnstile/v0/siteverify`) qua native `fetch` của Node.js 22, triệt tiêu rủi ro supply chain.
+    - Áp dụng `AbortController` với timeout 5000ms ngăn chặn sự cố mạng làm treo luồng xác thực của người dùng.
+    - Hỗ trợ Cloudflare Official Dummy Keys (`1x0000000000000000000000000000000AA` pass, `2x...AA` fail, `3x...AA` spent) phục vụ testing và staging mượt mà.
+  - **2. Centralized Constants & Error Codes**:
+    - Quản lý tập trung tại `src/common/constants/turnstile.constant.ts` (`TURNSTILE_VERIFY_URL`, `TURNSTILE_DUMMY_SECRET_*`, `TURNSTILE_HEADERS`, `TURNSTILE_BODY_KEY`, `TURNSTILE_ACTION`).
+    - Bổ sung mã lỗi chuẩn tại `src/common/errors/error-code.ts`: `CAPTCHA_REQUIRED` và `CAPTCHA_INVALID`.
+  - **3. Fail-Safe Configuration (`src/config/env.config.ts` & `.env.example`)**:
+    - Biến môi trường: `TURNSTILE_ENABLED` (boolean string, mặc định `false` tự động bypass trong dev/test), `TURNSTILE_SECRET_KEY`.
+    - Ràng buộc môi trường production: Khi `TURNSTILE_ENABLED=true`, bắt buộc `TURNSTILE_SECRET_KEY` phải được cấu hình bằng secret key thật của Cloudflare, cấm sử dụng dummy test keys.
+  - **4. Turnstile Service (`src/common/services/turnstile.service.ts`)**:
+    - Encapsulate toàn bộ logic verify: kiểm tra trạng thái bật/tắt, validate token, định dạng payload `application/x-www-form-urlencoded`, gửi kèm `remoteip` và `idempotency_key`, kiểm tra tính toàn vẹn của `action` (chống tái sử dụng token giữa các hành động khác nhau).
+  - **5. Turnstile Middleware (`src/middlewares/turnstile.middleware.ts`)**:
+    - `turnstileGuard({ action?: TurnstileAction })`: Middleware Express linh hoạt, tự động trích xuất token từ headers (`cf-turnstile-response`, `x-turnstile-token`) hoặc request body (`turnstileToken`, `cf-turnstile-response`).
+    - Trích xuất client IP chính xác hỗ trợ Cloudflare Proxy (`cf-connecting-ip`), tự động chuẩn hóa IPv6 prefix `::ffff:`.
+    - Chuyển tiếp lỗi có cấu trúc HTTP 400 (`AppError`) tới `errorMiddleware`.
+  - **6. Route & Schema Integration**:
+    - Mở rộng `registerSchema`, `forgotPasswordSchema`, `resendVerificationSchema` trong `src/modules/auth/auth.validation.ts` chấp nhận `turnstileToken?: string` (tự động cập nhật tài liệu OpenAPI Swagger tại `/api/docs`).
+    - Bảo vệ các endpoint nhạy cảm trong `src/modules/auth/auth.route.ts`:
+      - `POST /api/v1/auth/register` (action: `TURNSTILE_ACTION.REGISTER`)
+      - `POST /api/v1/auth/forgot-password` (action: `TURNSTILE_ACTION.FORGOT_PASSWORD`)
+      - `POST /api/v1/auth/resend-verification` (action: `TURNSTILE_ACTION.RESEND_VERIFICATION`)
+  - **7. Automated Testing & Verification**:
+    - Bộ test suite chuyên dụng tại `tests/turnstile.test.ts` (23 test cases) kiểm thử toàn diện constants, dummy keys, verification logic, action mismatch, network timeout, token extraction headers/body, middleware rejection/passthrough và schema compatibility.
+    - Toàn bộ automated test suite đạt **405/405 tests pass 100%**.
+    - `pnpm build` (tsc 0 lỗi), `pnpm run lint` (0 error/warning), `pnpm exec prisma validate` thành công rực rỡ.
+
+- **Phase 5: RFC 9116 Security.txt (Vulnerability Disclosure Standard) (2026-10-01)**:
+  - **1. IETF Standard Compliance (RFC 9116)**:
+    - Triển khai đầy đủ endpoint `GET /.well-known/security.txt` trả về nội dung `text/plain; charset=utf-8` kèm `Cache-Control: public, max-age=86400`.
+    - Hỗ trợ chuyển hướng 301 vĩnh viễn từ đường dẫn tương thích lịch sử `GET /security.txt` sang `/.well-known/security.txt` theo khuyến nghị Mục 3 của RFC 9116.
+    - Cung cấp đầy đủ các chỉ thị chuẩn: `Contact:` (URI hợp lệ), `Expires:` (RFC 3339 / ISO 8601 không quá 365 ngày), `Preferred-Languages:` (`en, vi`), `Canonical:`, `Policy:`, và `Acknowledgments:`.
+  - **2. Layered Architecture & Module Isolation (`src/modules/security-txt/`)**:
+    - `SecurityTxtService`: Logic sinh nội dung chuẩn hóa, tự động fallback `renderExternalUrl` / `appUrl` / `http://localhost:7777`, tự động định dạng `mailto:` prefix cho địa chỉ email, và tính toán ngày hết hạn động (dynamic expiry) chống rủi ro tệp bị stale.
+    - `SecurityTxtController`: Xử lý HTTP response, headers chuẩn hóa, và chuyển hướng 301.
+    - `SecurityTxtRoute`: Định tuyến cho cả `/.well-known/security.txt` và `/security.txt`.
+    - `SecurityTxtOpenApi`: Tự động đăng ký OpenAPI 3.0 specs dưới tag `Security` tại `/api/docs`.
+  - **3. Dual-Mounting & Maintenance Exemption**:
+    - Mount ở root level trong `src/app.ts` (`app.use(securityTxtRoute)`) phục vụ các bot quét bảo mật và chuyên gia pentest.
+    - Đồng thời mount trong `src/routes/index.ts` để hỗ trợ truy cập qua tiền tố `/api/v1/.well-known/security.txt`.
+    - Bổ sung regex `/^\/(\.well-known\/)?security\.txt/` vào `DEFAULT_EXEMPT_PATHS` trong `src/middlewares/maintenance.middleware.ts`, đảm bảo các nhà nghiên cứu bảo mật luôn tiếp cận được thông tin liên hệ ngay cả khi hệ thống đang trong chế độ bảo trì.
+  - **4. Environment Configuration (`src/config/env.config.ts` & `.env.example`)**:
+    - Thêm các biến môi trường: `SECURITY_CONTACT_EMAIL` (mặc định `security@example.com`), `SECURITY_POLICY_URL`, `SECURITY_ACKNOWLEDGMENTS_URL`.
+  - **5. Automated Testing & Verification**:
+    - Bộ test suite tự động `tests/security-txt.test.ts` (12 test cases) kiểm tra toàn diện cấu trúc RFC 9116, định dạng URI, giới hạn 1 năm của `Expires`, headers HTTP `text/plain; charset=utf-8`, chuyển hướng 301, dual-mount root & `/api/v1`, và Swagger documentation.
+    - Toàn bộ automated test suite đạt **417/417 tests pass 100%**.
+    - `pnpm build` (tsc 0 lỗi), `pnpm run lint` (0 error/warning), `pnpm exec prisma validate` thành công rực rỡ.
+
+- **Phase 6: Real Services Verification & High-Fidelity Test Hardening (2026-10-01)**:
+  - **1. Real Database Schema & Migration Deployment**:
+    - Phát hiện và triển khai thành công 5 migration còn thiếu trên database PostgreSQL thực tế (`Supabase`): `20260905000000_add_user_social_user_id_index`, `20260918000000_init_uuidv7`, `20260925150000_add_user_lockout_and_password_policy`, `20260925160000_add_file_records`, `20260925170000_add_full_text_search_gin_indexes`.
+    - Kích hoạt thành công hàm `uuid_generate_v7()`, bảng `file_records`, các cột `failed_login_attempts`, `locked_until`, `must_change_password`, và 3 chỉ mục GIN cho Full-Text Search trên database thực.
+  - **2. Cloud Services & Real Integration Audit**:
+    - **Cloudflare R2 / S3 Object Storage**: Kiểm tra kết nối thành công với bucket thực `loichoi`. Sinh link presigned upload PUT, xác nhận upload vào DB, sinh link download GET, và xóa tệp an toàn.
+    - **Cloudflare Turnstile**: Kiểm tra xác thực token thực tế trên Cloudflare Siteverify API (`challenges.cloudflare.com`), xử lý token rỗng và token không hợp lệ chuẩn RFC lỗi 400.
+    - **PostgreSQL Full-Text Search (FTS)**: Xác thực các câu truy vấn FTS thực tế với GIN index và hàm xếp hạng `ts_rank` trên các bảng `users`, `file_records`, `audit_logs`.
+    - **Health & Readiness Check**: Xác thực endpoint kiểm tra liveness và readiness với database PostgreSQL trực tiếp.
+    - **Mail Pipeline**: Xác thực API key Resend HTTP 200 OK và SMTP Transporter Gmail 587 kết nối thành công.
+  - **3. Bug Remediation & Defensive Hardening**:
+    - **Ownership & Nullability Comparison trong FileService**: Chuẩn hóa so sánh `(file.userId ?? null) === (userId ?? null)` trong `confirmUpload` và `deleteFile`, loại bỏ lỗi chặn quyền xác nhận tệp tin do khác biệt kiểu giữa `null` trong PostgreSQL và `undefined` từ context người dùng.
+    - **Safe Destructuring trên Repository Query Parameters**: Khắc phục lỗi runtime `TypeError: Cannot destructure property 'search' of 'query' as it is undefined` tại các repository (`RbacRepository`, `UserRepository`, `FileRepository`, `SystemConfigRepository`) bằng cách gán giá trị mặc định an toàn `query = {}` và `query || {}`.
+    - **Notification UUID Validation Guard**: Bổ sung regex guard `/^[0-9a-fA-F-]{36}$/` trong `NotificationRepository.createSingleNotification` ngăn chặn crash database PostgreSQL khi nhận ID người dùng sai định dạng UUID.
+    - **Constructor Dependency Injection trong AuthService**: Hỗ trợ injection cho `dispatcher` và các services phụ thuộc, cách ly triệt để side-effects gửi thông báo trong môi trường kiểm thử tự động.
+  - **4. Singleton Export Harmonization**:
+    - Bổ sung `export const fileService = new FileService();` trong `file.service.ts` và `export const authRepository = new AuthRepository();` trong `auth.repository.ts` thống nhất chuẩn layered architecture toàn dự án.
+- **Phase 7: Comprehensive Architecture & Open-Code-Review Remediation (2026-10-01)**:
+  - **1. Centralized Constants & Anti-Magic-Strings**:
+    - Tạo mới `src/common/constants/verification-token.constant.ts` (`VERIFICATION_TOKEN_TYPE: EMAIL_VERIFICATION, DEACTIVATION, PASSWORD_RESET`).
+    - Thay thế toàn bộ magic strings `"EMAIL_VERIFICATION"` và `"DEACTIVATION"` trong `AuthRepository`.
+    - Tái sử dụng hằng số `SYSTEM_TARGET_ID` từ `audit-log.constant.ts` tại `UserRepository.createAuditLog` thay cho chuỗi tự do `"SYSTEM"`.
+    - Sử dụng `EMAIL_STATUS.SENT` trong `NotificationService.retryEmail`.
+  - **2. Type-Safety & Crypto Helper Standardization**:
+    - **RefreshTokenPayload & Type Guard**: Khai báo `RefreshTokenPayload` và type guard `isRefreshTokenPayload` trong `AuthService`, xóa bỏ ép kiểu `as any` tại `jwt.verify`.
+    - **Audit Log Details Typing**: Chuẩn hóa kiểu dữ liệu trường `details` của `createAuditLog` trên tất cả các repositories (`AuthRepository`, `UserRepository`, `FileRepository`) thành `details?: Record<string, unknown> | null`, và cast an toàn sang `Prisma.InputJsonValue`.
+    - **Standardized Token Hashing**: Thay thế việc tự tính SHA-256 inline bằng helper chuẩn `hashToken()` trong `AuthService.getActiveSessions`.
+    - **Standardized UUID Validation**: Bổ sung `UUID_REGEX` và type guard `isUuid(value: unknown): value is string` vào `src/common/helpers/uuid.helper.ts`; thay thế các regex inline rải rác trong `AuthService` và `NotificationRepository`.
+  - **3. Transaction Atomicity & Business Logic Separation**:
+    - **Atomic Social Account Linking & Activation**: Bổ sung method `linkAndActivateSocialUser` trong `AuthRepository` bọc cả `userSocial.create` và `user.update({ isActive: true, password: null })` trong `prisma.$transaction(..., DEFAULT_TRANSACTION_OPTIONS)`.
+    - **Single Responsibility for Login Flow**: Tách `assertAccountNotLocked` và `handleFailedLoginAttempt` thành private helpers trong `AuthService`, làm gọn hàm `login()`.
+    - **Idempotent Logout**: `AuthService.logout` xử lý an toàn (idempotent), không throw 400 nếu refresh token đã bị xóa hoặc hết hạn.
+  - **4. Dependency Injection & Clean Testing**:
+    - Bổ sung constructor dependency injection trong `AuthController` (`service?: AuthService`) và `NotificationService` (`repository?: NotificationRepository, emailTemplateService?: EmailTemplateService`).
+    - Trong `RbacService`, chuẩn hóa các truy vấn tài khoản người dùng qua private helpers (`findUserForRoleCheck`, `assignRoleForUser`) và lookup anti-lockout permission qua `getRolePermissionAssignId`, loại bỏ mã lặp và an toàn với test mocks.
+    - Loại bỏ việc gọi dư thừa `calculatePaginationSkip` ở `NotificationService.list`, ủy thác pagination skip/take cho repository và dùng `formatPaginationMeta` thống nhất.
+    - Bổ sung kiểm tra quyền sở hữu defense-in-depth tùy chọn `userId?: string` trong `FileRepository.delete`.
+  - **5. Automated Testing & Verification**:
+    - Toàn bộ automated test suite đạt **417/417 tests pass 100%**.
+    - `pnpm build` (tsc 0 lỗi), `pnpm run lint` (0 error/warning), `pnpm exec prisma validate` (hợp lệ).
+
+- **Project-Wide Security Vulnerability Remediation (2026-10-01)**:
+  - **CRIT-01 (BOLA/IDOR)**: Sửa điều kiện xác nhận upload tệp trong `file.service.ts` (`isOwner = Boolean(file.userId && userId && file.userId === userId)`), ngăn chặn triệt để lỗ hổng bypass `null === null` đối với các file anonymous/unassigned.
+  - **HIGH-01 (SSRF DNS Rebinding)**: Tích hợp `resolveAndValidateDns()` trong `IntegrationService.createWebhook` và `updateWebhook`, kiểm tra IP thực tế sau phân giải DNS chống trỏ về private/cloud metadata IP (AWS `169.254.169.254`, loopback `127.0.0.1`).
+  - **HIGH-02 (Health Diagnostics Protection)**: Thêm `rateLimitMiddleware` vào `/health/readiness` trong `health.route.ts` và ẩn `latencyMs` trên môi trường production trong `health.service.ts` nhằm chống DoS connection pool và rò rỉ cấu trúc mạng.
+  - **HIGH-03 (Supply Chain CVEs)**: Nâng cấp `nodemailer` lên `10.0.13`, `multer` lên `2.4.0`, `morgan` lên `1.12.1`, và override `brace-expansion` lên `^1.1.21`, đưa `pnpm audit` về **0 vulnerabilities**.
+  - **HIGH-04 (Account Takeover Prevention)**: Chặn việc đặt mật khẩu trực tiếp trong `AuthService.updatePassword` cho tài khoản đăng ký qua mạng xã hội (`user.password === null`), yêu cầu người dùng phải xác thực email qua luồng Quên mật khẩu để ngăn chặn chiếm đoạt tài khoản khi lộ access token tạm thời.
+  - **HIGH-05 (Rate Limiting on OAuth URL)**: Gắn `authRateLimitMiddleware` cho `GET /auth/google/url` trong `auth.route.ts`.
+  - **MED-01 (Mass Assignment Defense)**: Trong `UserService.update`, bổ sung kiểm tra phân quyền thứ bậc cho thao tác thay đổi `isActive`, chỉ cho phép tài khoản Quản trị viên kích hoạt hoặc vô hiệu hóa tài khoản người dùng.
+  - **MED-02 (Metadata Over-Exposure Defense)**: Bổ sung `userSummarySelect` trong `UserRepository` loại bỏ các trường bảo mật nhạy cảm (`failedLoginAttempts`, `lockedUntil`) khỏi kết quả truy vấn danh sách người dùng (`findAll`).
+  - **MED-05 (Upload Metadata JSON Hardening)**: Giới hạn `metadata` trong `file.validation.ts` tối đa 20 fields và chỉ nhận kiểu dữ liệu an toàn (`string <= 500`, `number`, `boolean`).
+  - **MED-06 (Webhook Payload Hardening)**: Validate chặt chẽ `taskName` (`/^[a-zA-Z0-9_-]+$/`) và giới hạn payload `data` trong `integration.validation.ts`.
+  - **MED-07 (PII Protection)**: Mask email người dùng trước khi ghi log cảnh báo lỗi gửi email trong `AuthService.sendVerificationEmail`.
+  - **LOW-01 & LOW-02 (Logging & Error Masking)**: Sử dụng `req.path` thay cho `req.originalUrl` trong 404 handler và sanitize `X-Request-Id` trước khi in ra console error trong `error.middleware.ts`.
+  - **LOW-03 (Mailbox Flooding Cooldown)**: Bổ sung `findRecentPasswordResetToken` trong `AuthRepository` và cooldown 60 giây trong `AuthService.forgotPassword`.
+  - **Automated Verification**: `pnpm build` (tsc 0 lỗi), `pnpm test` (417/417 tests pass 100%), `pnpm run lint` (0 error/warning), `pnpm exec prisma validate` (hợp lệ), và `pnpm audit` (0 vulnerabilities).
+
+- **Microservices Architecture: Phase 1 (Process Decoupling & Containerization) (2026-10-03)**:
+  - **1. Entry Point Decoupling**:
+    - `src/api.server.ts`: Chuyên trách phục vụ HTTP API requests, Swagger docs, health checks. Không khởi chạy BullMQ background workers, bảo toàn 100% CPU/RAM cho xử lý I/O mạng.
+    - `src/worker.server.ts`: Chuyên trách chạy BullMQ background workers (`emailWorker`, `webhookWorker`, `cronWorker`) và đăng ký cron schedules. Không mở cổng HTTP listener.
+    - `src/server.ts`: Giữ nguyên làm all-in-one Monolith runner phục vụ local development và tương thích ngược.
+  - **2. Multi-Container Orchestration (`docker-compose.yml`)**:
+    - Cấu hình multi-container: `app-api` (expose port 9999, CMD `node dist/api.server.js`) và `app-worker` (chạy ngầm, CMD `node dist/worker.server.js`), cùng chia sẻ dịch vụ `redis`.
+  - **3. Package Scripts (`package.json`)**:
+    - Bổ sung `dev:api`, `dev:worker`, `start:api`, `start:worker`.
+  - **4. Automated Testing & Verification**:
+    - Bộ test tự động `tests/process-decoupling.test.ts` kiểm thử sự cô lập và graceful shutdown của cả 2 tiến trình.
+    - Toàn bộ automated test suite đạt **418/418 tests pass 100%**.
+    - `pnpm build` (tsc 0 lỗi), `pnpm run lint` (0 error/warning).
+
+- **Microservices Architecture: Phase 2 (Asymmetric JWT RS256 & RFC 7517 JWKS) (2026-10-03)**:
+  - **1. Asymmetric Cryptography & Key Management (`src/common/services/jwt-key.service.ts`)**:
+    - Chuyển đổi thuật toán ký Access Token sang **RS256** (RSA Signature with SHA-256) với cặp khóa 2048-bit.
+    - Hỗ trợ nạp khóa linh hoạt từ biến môi trường `JWT_PRIVATE_KEY` / `JWT_PUBLIC_KEY` (hỗ trợ raw PEM, escaped newline `\n`, base64, hoặc file path đĩa `keys/private.key.pem` và `keys/public.key.pem`).
+    - Tự động sinh cặp khóa RSA 2048-bit an toàn trong RAM khi khởi động nếu chưa cấu hình khóa trong môi trường dev/test, bảo đảm zero setup friction.
+    - Phương thức tĩnh `JwtKeyService.jwkToPem(jwk)` chuyển đổi JWK thành SPKI PEM native bằng `node:crypto`.
+    - Centralized constants tại `src/common/constants/jwt.constant.ts` (`JWT_ALGORITHM`, `JWKS_CONSTANTS`, `JWT_PURPOSE`).
+  - **2. RFC 7517 JWKS Endpoint (`src/modules/jwks/`)**:
+    - Triển khai endpoint công khai `GET /.well-known/jwks.json` theo đúng chuẩn kiến trúc 5 tầng: `route -> controller -> service -> dto -> openapi`.
+    - Trả về payload chuẩn: `{ keys: [{ kty: "RSA", use: "sig", alg: "RS256", kid: "...", n: "...", e: "AQAB" }] }`.
+    - Thiết lập HTTP response headers: `Content-Type: application/json; charset=utf-8` và `Cache-Control: public, max-age=86400, stale-while-revalidate=3600`.
+    - Dual-Mount: Mount ở root level trong `src/app.ts` (`/.well-known/jwks.json`) và API v1 trong `src/routes/index.ts` (`/api/v1/.well-known/jwks.json`).
+    - Maintenance Exemption: Thêm `/^\/(\.well-known\/)?jwks\.json/` vào `DEFAULT_EXEMPT_PATHS` trong `src/middlewares/maintenance.middleware.ts`, đảm bảo các satellite microservices luôn tải được Public Key kể cả khi hệ thống bảo trì.
+    - Đăng ký tài liệu Swagger UI tự động tại `/api/docs` dưới tag `Authentication` (`jwks.openapi.ts`).
+  - **3. Decentralized Local JWT Verification Middleware (`src/middlewares/verify-jwt-locally.middleware.ts`)**:
+    - Cung cấp `createVerifyJwtLocally`, `verifyJwtLocally` và `optionalVerifyJwtLocally`.
+    - Xác thực chữ ký token RS256 hoàn toàn cục bộ (offline / in-memory cache) trong **0.01ms** ngay tại mỗi satellite microservice (Media Service, Notification Service, API Gateway) mà **không cần gọi HTTP sang Auth Service** và **không cần kết nối Database**.
+    - In-memory RAM Cache với TTL 24 giờ cho Public Keys.
+    - Hỗ trợ Key Rotation không downtime: Tự động refresh cache khi phát hiện `kid` mới trong header token.
+    - Bảo vệ chống Token Confusion Attack: Bắt buộc `alg === 'RS256'` và kiểm tra mục đích token (`purpose === 'ACCESS'`), chặn tuyệt đối token tạm thời 2FA (`2FA_VERIFICATION`) hoặc temp tokens.
+  - **4. Monolith Integration & Backward Compatibility**:
+    - `AuthService.issueAuthTokens()`, `AuthService.refreshToken()` và `Auth2FAService.verify2FALogin()` chuyển sang dùng `jwtKeyService.signAccessToken(payload)`.
+    - `auth.middleware.ts` và `maintenance.middleware.ts` hỗ trợ nhận diện và xác thực cả token RS256 (bằng Public Key) lẫn HS256 (tương thích ngược cho các token phát hành trước đây và các test suites có sẵn).
+  - **5. Automated Testing & Verification**:
+    - Bộ test tự động chuyên dụng `tests/asymmetric-jwt-phase2.test.ts` (26 test cases mới) bao quát toàn bộ: Key generation, JWK export/import, RS256 signing/verification, tampered/expired/rogue rejection, JWKS HTTP endpoint & dual-mount, offline verification latency, key rotation simulation, và cross-service strangler fig simulation.
+    - Toàn bộ test suite đạt **444/444 tests pass 100%**.
+    - `pnpm build` (tsc 0 lỗi), `pnpm run lint` (0 error/warning), `pnpm exec prisma validate` (hợp lệ).
+
+- **Open-Code-Review Audit & Autonomous Hardening (2026-10-03)**:
+  - **1. Defensive Cryptographic Initialization**: Trong `src/common/services/jwt-key.service.ts`, xác thực tính hợp lệ của `privateKey` và `publicKey` bằng `crypto.createPrivateKey` / `crypto.createPublicKey` khi nạp; nếu khóa không hợp lệ, tự động fallback sinh cặp khóa RSA an toàn, triệt tiêu lỗi OpenSSL `ERR_OSSL_UNSUPPORTED` và `secretOrPrivateKey must be an asymmetric key`.
+  - **2. Fail-Fast Production Validation**: Bổ sung `.refine()` trong `src/config/env.config.ts` bắt buộc cấu hình `JWT_PRIVATE_KEY` khi `JWT_ALGORITHM=RS256` trong môi trường `NODE_ENV=production`, ngăn chặn việc tự sinh khóa ngẫu nhiên trên RAM gây mất đồng bộ session giữa các pod/container replicas.
+  - **3. Decentralized Verification Bug Fix & Bounded Cache (CWE-400)**: Trong `src/middlewares/verify-jwt-locally.middleware.ts`, sửa lỗi logic gán fallback key đầu tiên khi `kid` không tồn tại trong JWKS; áp dụng cơ chế LRU/bounded cache (tối đa 100 keys kèm eviction key hết hạn); loại bỏ dead-code trong key rotation; bổ sung cơ chế fallback về `localPem` khi `AUTH_JWKS_URL` từ xa tạm thời không thể kết nối; loại bỏ `as any` thay bằng interface `AccessTokenClaims`.
+  - **4. DoS Protection & Dual-Mount Maintenance Routing**: Áp dụng `rateLimitMiddleware` cho `jwksRoute` tại root trong `src/app.ts`; cập nhật regex `DEFAULT_EXEMPT_PATHS` trong `src/middlewares/maintenance.middleware.ts` hỗ trợ bypass cả route gốc và route dual-mount `/api/v1/.well-known/jwks.json`.
+  - **5. Clean Layering & Zero Magic Strings**: Tạo file `src/modules/jwks/jwks.validation.ts` hoàn thiện cấu trúc module 5 lớp; tái sử dụng tập trung `jwtKeyService.verifyAccessToken(token)` trong `auth.middleware.ts`; thay thế toàn bộ chuỗi magic strings bằng `JWT_PURPOSE.ACCESS`, `JWT_PURPOSE.TWO_FACTOR`, `JWT_ALGORITHM.RS256`, `JWT_ALGORITHM.HS256`.
+  - **6. Verification Results**: `pnpm build` (tsc 0 lỗi), `pnpm run lint` (0 warnings / 0 errors), `pnpm exec prisma validate` (hợp lệ), và toàn bộ test suite đạt **444/444 tests pass 100%**.
+
+- **Microservices Architecture: Phase 3 (Event-Driven Backbone & Transactional Outbox Pattern) (2026-10-03)**:
+  - **1. Event Contract Matrix & Centralized Constants (`src/common/constants/event.constant.ts` & `src/common/types/event.type.ts`)**:
+    - Chuẩn hóa toàn bộ tên sự kiện theo format `domain.action` dưới dạng `as const`:
+      - `auth.user_registered`: Auth -> Notification Service (`{ userId, email, fullName, verifyToken }`)
+      - `auth.password_reset_requested`: Auth -> Notification Service (`{ userId, email, resetToken, ip }`)
+      - `auth.new_device_detected`: Auth -> Notification Service (`{ userId, email, deviceName, ip }`)
+      - `user.soft_deleted`: User -> Auth & Storage (`{ userId, deletedBy, deletedAt }`)
+      - `file.uploaded_unconfirmed`: File -> Cron / Cleanup (`{ fileId, key, bucket, expiresAt }`)
+    - Hằng số quản lý: `OUTBOX_STATUS` (`PENDING`, `PROCESSING`, `PUBLISHED`, `FAILED`) và `EVENT_BUS_CONSTANTS` (max attempts 5, backoff delay 500ms, batch size 50, poll interval 5s, idempotency TTL 24h, stale processing timeout 5m).
+    - Chuẩn hóa `EventEnvelope<T>` chứa metadata: `id` (UUIDv7), `name`, `payload`, `aggregateId`, `timestamp`, `traceId`, `source`.
+  - **2. Transactional Outbox Pattern & Zero Event Loss (`schema.prisma` & `src/common/repositories/outbox.repository.ts`)**:
+    - Thêm model `OutboxEvent` (`outbox_events` table) với id UUIDv7, `event_type`, `payload` (JSON), `status`, `attempts`, `last_error`, `published_at`, `created_at`, `updated_at`.
+    - Migration an toàn `20261003150000_add_outbox_events` đã được áp dụng vào PostgreSQL database.
+    - `OutboxRepository.claimPendingEvents(batchSize)` thực hiện cập nhật nguyên tử duy nhất:
+      `UPDATE outbox_events SET status = 'PROCESSING', updated_at = NOW() WHERE id IN (SELECT id FROM outbox_events WHERE (status = 'PENDING' OR (status = 'PROCESSING' AND updated_at < NOW() - INTERVAL '5 minutes')) ORDER BY created_at ASC LIMIT $1 FOR UPDATE SKIP LOCKED) RETURNING ...`. Triệt tiêu hoàn toàn race condition và khóa không nhả khi chạy song song nhiều container / workers, đồng thời tự động thu hồi (reclaim) các job bị treo do crash.
+    - Hỗ trợ ghi sự kiện nguyên tử trong cùng Prisma interactive transaction (`options.tx`) với các thao tác ghi dữ liệu nghiệp vụ (`registerUserWithVerification`, `createPasswordResetToken`).
+    - Bổ sung `deletePublishedOlderThan(cutoffDate)` cho phép dọn dẹp các outbox event đã gửi thành công định kỳ.
+  - **3. Field-Level Sensitive Token Encryption At-Rest**:
+    - Để bảo vệ an toàn theo chính sách SHA-256 hashing và OWASP Sensitive Data Exposure, `EventBusService` tự động mã hóa đối xứng AES-256-GCM (`encryptSensitivePayloadFields` với tiền tố `enc:`) cho các token nhạy cảm (`verifyToken`, `resetToken`) trước khi lưu vào cột `payload` JSON của bảng `outbox_events`.
+    - Khi Outbox Relay quét và nạp sự kiện ra để gửi tới subscriber/email queue, hệ thống tự động giải mã ngược (`decryptSensitivePayloadFields`) nhằm bảo toàn nguyên vẹn link gửi tới người dùng mà không bao giờ lộ token rõ trong dump database.
+  - **4. EventBusService with Resilience & Deduplication (`src/common/services/event-bus.service.ts`)**:
+    - Triển khai `EventBusService` hỗ trợ:
+      - Pub/Sub đa kênh với fan-out tới nhiều subscribers.
+      - Tự động tích hợp BullMQ Redis stream / queue khi khả dụng và in-memory queue fallback cho test/dev.
+      - **Idempotent Consumer Deduplication**: Bộ nhớ đệm 24h theo dõi `envelope.id` để tự động phát hiện và bỏ qua sự kiện trùng lặp do mạng hoặc retry (At-Least-Once Delivery safety).
+      - **Dead-Letter Queue (DLQ)**: Khi consumer gặp sự cố và retry vượt quá số lần tối đa (`DEFAULT_MAX_ATTEMPTS = 5`), sự kiện tự động được chuyển sang hàng đợi DLQ (`dlqEvents` / Redis `dlq:*`) kèm chi tiết lỗi và số lần thử để phân tích sự cố.
+      - **Outbox Relay**: Phương thức `relayPendingOutboxEvents()` quét các bản ghi PENDING/PROCESSING, dispatch tới consumers và đánh dấu PUBLISHED hoặc ghi nhận FAILED an toàn.
+  - **5. Specialized Microservices Subscribers & BullMQ Worker (`src/common/subscribers/` & `src/common/workers/`)**:
+    - `EventBusWorker` (`src/common/workers/event-bus.worker.ts`): Lắng nghe hàng đợi Redis `events-backbone-queue` với concurrency 10, dispatch trực tiếp sự kiện tới các subscribers trong background process độc lập.
+    - `NotificationSubscriber`: Lắng nghe các sự kiện xác thực (`auth.user_registered`, `auth.password_reset_requested`, `auth.new_device_detected`) và điều phối gửi email hoặc alert. Đã mask email trong log bảo vệ PII.
+    - `AuthCleanupSubscriber`: Lắng nghe `user.soft_deleted` để tự động thu hồi toàn bộ Refresh Tokens (`revokeAllUserSessions`) và xóa sạch cache phân quyền (`permissionCacheService.invalidateUser`).
+    - `StorageCleanupSubscriber`: Lắng nghe `file.uploaded_unconfirmed` để theo dõi và chuẩn bị dọn dẹp các tệp tải lên mồ côi quá hạn.
+    - `registerAllSubscribers()`: Đăng ký toàn bộ event subscribers của hệ thống vào `EventBus`.
+  - **6. Background Poller, Process Decoupling & Cron Integration**:
+    - `OutboxWorker`: Tiến trình định kỳ quét và relay các sự kiện pending trong bảng outbox.
+    - Tích hợp `eventBusWorker` và `outboxWorker` vào cả `src/server.ts` và `src/worker.server.ts` cùng cơ chế khởi động và dừng graceful shutdown an toàn (`outboxWorker.stop()`, `eventBusWorker.stop()`, và `eventBus.close()`).
+    - `CronService.executeExpiredTokensCleanup`: Bổ sung tác vụ định kỳ tự động dọn dẹp các outbox events trạng thái `PUBLISHED` cũ hơn 24 giờ qua `outboxRepository.deletePublishedOlderThan(cutoff)`.
+  - **7. Decoupled Service Publishing**:
+    - `AuthService`: Tích hợp xuất bản `auth.user_registered`, `auth.password_reset_requested`, `auth.new_device_detected` qua transactional outbox. Đã loại bỏ hoàn toàn cơ chế in-memory fallback mail, triệt tiêu nguy cơ gửi trùng lặp email khi chạy tách tiến trình (Process Decoupling).
+    - `UserService`: Xuất bản `user.soft_deleted` khi tài khoản người dùng bị xóa mềm (strict typing với tuple destructuring `const [deletedUser] = result`).
+    - `FileService`: Xuất bản `file.uploaded_unconfirmed` khi cấp presigned URL tải tệp lên R2.
+  - **8. Automated Testing & Verification**:
+    - Bộ test tự động chuyên dụng `tests/event-driven-backbone-phase3.test.ts` (18 test cases) bao phủ 100% các tiêu chí: Payload contracts, Pub/Sub fanout, Unsubscribe, Idempotent deduplication, DLQ error capture, Outbox creation & atomic relay (`FOR UPDATE SKIP LOCKED`), error retry / status transition, AES-256-GCM token encryption, EventBusWorker lifecycle, và specialized subscribers.
+    - Toàn bộ automated test suite đạt **462/462 tests pass 100%** across 50 test files (không có bất kỳ regression nào).
+    - `pnpm build` (tsc 0 lỗi), `pnpm run lint` (0 error/warning), `pnpm exec prisma validate` (hợp lệ).
+
+- **Phase 4: API Gateway & Reverse Proxy với Traefik (2026-10-03)**:
+  - **Mục tiêu**: Tập trung toàn bộ biên giới hệ thống vào một cổng duy nhất (API Gateway) trước khi traffic vào các microservice.
+  - **Gateway lựa chọn**: **Traefik v3** — tích hợp native với Docker Compose qua labels, hỗ trợ Let's Encrypt ACME, hot-reload cấu hình động, không cần code gateway riêng.
+  - **1. Gateway Constants (`src/common/constants/gateway.constant.ts`)**:
+    - `GATEWAY_HEADERS`: Tập trung tên headers: `REQUEST_ID` (`x-request-id`), `INTERNAL_SECRET` (`x-gateway-secret`), `REAL_IP` (`x-real-ip`), `FORWARDED_PROTO`, `FORWARDED_HOST`, `FORWARDED_SERVICE`.
+    - `GATEWAY_ROUTES`: Tập trung route prefixes cho tất cả services.
+    - Tuyệt đối không hard-code tên header gateway ở bất kỳ nơi nào khác.
+  - **2. Request ID Middleware nâng cấp (`src/middlewares/request-id.middleware.ts`)**:
+    - Thay `crypto.randomUUID()` (UUIDv4) bằng `uuidv7()` (UUIDv7 — time-ordered, RFC 9562).
+    - **Gateway Trust Logic**: Nhận `x-request-id` từ Traefik nếu request cùng lúc mang `x-gateway-secret` đúng. Nếu `GATEWAY_INTERNAL_SECRET` chưa cấu hình → nhận header từ bất kỳ nguồn nào (backward-compatible cho monolith/dev mode).
+    - **`requireGatewayOrigin()` middleware**: Middleware tùy chọn bảo vệ internal-only endpoint, trả về `403 GATEWAY_REQUIRED` nếu request không đến từ gateway hợp lệ.
+  - **3. Env Config mở rộng (`src/config/env.config.ts`)**:
+    - Thêm `GATEWAY_INTERNAL_SECRET` vào Zod schema (default rỗng → tắt kiểm tra).
+    - Expose qua `envConfig.gateway.internalSecret`.
+  - **4. Docker Compose cập nhật (`docker-compose.yml`)**:
+    - Thêm service `traefik` (Traefik v3.3) với Docker socket bind, static config (`traefik/traefik.yml`), dynamic config (`traefik/dynamic.yml`).
+    - **Network isolation**: Tạo `gateway_net` (public) và `internal_net` (internal: true) — app-api, app-worker, redis chỉ giao tiếp trong `internal_net`, không expose ra ngoài.
+    - `app-api`: Chỉ dùng `expose` (không `ports`), phụ thuộc vào Traefik qua health check. Labels định nghĩa router, service, middleware chain.
+    - `app-worker`: Không có Traefik label (không nhận HTTP).
+    - Health checks cho cả Redis, app-api, Traefik.
+  - **5. Traefik Config (`traefik/`)**:
+    - `traefik.yml`: Static config — entrypoints (:80, :443), Docker provider, file provider, Let's Encrypt ACME.
+    - `traefik.dev.yml`: Static config cho dev — dashboard insecure, không TLS/ACME.
+    - `dynamic.yml`: Dynamic middlewares (hot-reload):
+      - `security-headers`: Inject HTTP security headers (nosniff, XSS filter, frameDeny, permissions policy, xóa X-Powered-By/Server).
+      - `global-ratelimit`: 100 req/s sustained, burst 200 (gateway-level — bổ sung cho rate-limit.middleware.ts).
+      - `request-id`: Traefik auto-inject X-Request-Id nếu chưa có (UUIDv4 native Traefik).
+      - `inject-gateway-secret`: Inject `x-gateway-secret` với giá trị `GATEWAY_INTERNAL_SECRET`.
+      - `compress-response`: Nén response >= 1KB.
+      - TLS options: TLS 1.2 minimum, cipher suite mạnh, sniStrict.
+  - **6. Development Override (`docker-compose.dev.yml`)**:
+    - Traefik insecure dashboard, không TLS.
+    - Redis expose ra localhost.
+    - app-api expose port trực tiếp (bypass gateway khi debug).
+    - Hot-reload qua ts-node-dev.
+  - **7. Security & Architecture Hardening (Open Code Review Standards)**:
+    - **Timing-Safe Secret Comparison**: Sử dụng `crypto.timingSafeEqual` trong `isTrustedGatewayRequest` để triệt tiêu nguy cơ Timing Attack (CWE-208) khi xác thực `x-gateway-secret`.
+    - **Request ID Sanitization**: Regex `SAFE_REQUEST_ID_REGEX` (`^[a-zA-Z0-9_-]{1,128}$`) và hàm `isValidRequestId` bảo vệ hệ thống trước CRLF injection, HTTP Response Splitting và Log Injection (CWE-116).
+    - **Production Secret Validation**: Thêm Zod `.refine()` trong `env.config.ts` bắt buộc `GATEWAY_INTERNAL_SECRET` phải có độ dài tối thiểu 32 ký tự khi được khai báo trong môi trường production.
+    - **Centralized Error Standardization**: Đăng ký `ERROR_CODE.GATEWAY_REQUIRED` vào `src/common/errors/error-code.ts` và chuẩn hóa `requireGatewayOrigin` gọi `next(new AppError(..., 403, ERROR_CODE.GATEWAY_REQUIRED))` chuyển giao cho `errorMiddleware`.
+    - **Traefik Production Hardening**:
+      - Loại bỏ port 8080 khỏi `docker-compose.yml` (chỉ mở dashboard trong `docker-compose.dev.yml`).
+      - Cấu hình `api.insecure: false` trong `traefik/traefik.yml`.
+      - Khai báo middleware `inject-gateway-secret` qua Docker Compose labels để Docker engine tự động nội suy biến `${GATEWAY_INTERNAL_SECRET:-}`.
+      - Chuẩn hóa network name `${COMPOSE_PROJECT_NAME:-template-be}_internal_net` trong `docker-compose.dev.yml`.
+  - **8. Automated Testing & Verification**:
+    - `tests/api-gateway-phase4.test.ts` (45 test cases) bao phủ: Gateway constants, UUIDv7 generation & time-ordering, isTrustedGatewayRequest pure function, requestIdMiddleware, createRequestIdMiddleware gateway trust logic & injection sanitization, createRequireGatewayOrigin AppError passing & 403 blocking, envConfig gateway section, Traefik config file structure.
+  - **Trạng thái hoàn thành**: `pnpm build` (tsc 0 lỗi), `pnpm run lint` (0 warnings/errors), toàn bộ tests pass 100%.
+
+- **Microservices Architecture: Phase 5 (Notification Service Decoupling & Autonomous Microservice) (2026-10-03)**:
+  - **Mục tiêu**: Bóc tách miền nghiệp vụ Notification/Email ra khỏi Monolith thành một microservice độc lập (`notification-service`), giao tiếp bất đồng bộ qua Event-Driven Backbone / Transactional Outbox, có HTTP API và SSE stream riêng, được route qua Traefik API Gateway, và bảo đảm tính tương thích ngược 100% cho Monolith.
+  - **1. Event Contracts Expansion (`src/common/constants/event.constant.ts` & `src/common/types/event.type.ts`)**:
+    - Bổ sung 2 sự kiện xác thực mới vào `EVENT_NAMES`:
+      - `auth.verification_requested` (`AUTH_VERIFICATION_REQUESTED`): Auth -> Notification Service (`{ userId, email, fullName, verifyToken }`).
+      - `auth.deactivation_requested` (`AUTH_DEACTIVATION_REQUESTED`): Auth -> Notification Service (`{ userId, email, fullName, deactivationToken }`).
+    - Khai báo đầy đủ payload interface `VerificationRequestedPayload`, `DeactivationRequestedPayload` và đăng ký vào `EventPayloadMap`.
+  - **2. Sensitive Token Encryption At-Rest trong Outbox**:
+    - Mở rộng `encryptSensitivePayloadFields` và `decryptSensitivePayloadFields` trong `src/common/services/event-bus.service.ts` để tự động mã hóa đối xứng AES-256-GCM (`enc:`) cho `deactivationToken` khi lưu vào database và giải mã khi relay, bảo đảm zero plaintext token exposure.
+  - **3. Notification Subscriber Integration (`src/common/subscribers/notification.subscriber.ts`)**:
+    - Cài đặt handler cho `auth.verification_requested` và `auth.deactivation_requested`, dispatch tới `mailService.sendVerificationEmail` và `mailService.sendAccountDeactivationEmail`.
+    - Áp dụng mask email bảo vệ PII và ném lỗi khi mail service thất bại để kích hoạt retry/DLQ của event bus.
+  - **4. Monolith Decoupled Event Publishing (`src/modules/auth/auth.service.ts`)**:
+    - Chuyển đổi các lời gọi gửi email trực tiếp trong `resendVerificationEmail` và `requestDeactivate` sang xuất bản sự kiện qua `eventBus.publish()`.
+    - Bảo lưu cơ chế kiểm tra fallback `(this.mailService as any) !== mailService` nhằm duy trì tương thích ngược 100% cho các unit test sử dụng mock MailService độc lập.
+  - **5. Standalone Notification Microservice Application & Server (`src/notification.app.ts` & `src/notification.server.ts`)**:
+    - `src/notification.app.ts`: Express application độc lập, tích hợp Helmet, CORS, Morgan logger, Request ID tracing, `/health` và `/api/v1/notifications/health` endpoints cho Gateway loadbalancer, mount notification routes (`/api/v1/notifications` và `/notifications`).
+    - `src/notification.server.ts`: Tiến trình khởi chạy microservice độc lập (cổng mặc định 8889), kết nối `notificationSubscriber`, chạy `emailWorker` xử lý hàng đợi, và đăng ký cơ chế graceful shutdown (SIGINT/SIGTERM) an toàn.
+  - **6. Process Isolation & Worker Decoupling (`src/worker.server.ts` & `package.json`)**:
+    - Cập nhật `src/worker.server.ts` để tự động bỏ qua việc khởi chạy `emailWorker` khi `NOTIFICATION_SERVICE_STANDALONE=true` (tránh xung đột xử lý trùng lặp job giữa monolith worker và notification microservice).
+    - Thêm các lệnh `dev:notification` và `start:notification` vào `package.json`.
+  - **7. Traefik API Gateway Integration & Network Isolation (`docker-compose.yml` & `docker-compose.dev.yml`)**:
+    - Bổ sung container `notification-service` trong `docker-compose.yml` thuộc mạng nội bộ `internal_net`.
+    - Gắn nhãn Traefik labels định tuyến `/api/v1/notifications/*` về `notification-service:8889` với độ ưu tiên cao (`priority: 100`), vượt trên default monolith route (`priority: 1`).
+    - Thêm cấu hình phát triển tương ứng trong `docker-compose.dev.yml` với hot-reload qua `ts-node-dev`.
+    - Cập nhật `src/config/env.config.ts` và `.env.example` với các biến môi trường: `NOTIFICATION_PORT`, `NOTIFICATION_SERVICE_STANDALONE`, `NOTIFICATION_SERVICE_URL`.
+  - **8. Automated Testing & Verification (`tests/notification-microservice-phase5.test.ts`)**:
+    - Bộ test tự động chuyên dụng 23 test cases bao quát: Event contracts matrix, NotificationSubscriber dispatching & DLQ trigger, token AES-256-GCM encryption trong outbox, standalone notificationApp HTTP listener & health check, environment configuration, Traefik router config & docker-compose manifests, transactional outbox publishing & relay isolation.
+    - Toàn bộ automated test suite dự án đạt **530/530 tests pass 100%** (0 regressions).
+    - `pnpm build` (tsc 0 lỗi), `pnpm run lint` (0 error/warning), `pnpm exec prisma validate` (hợp lệ).
+  - **9. Open-Code-Review Hardening & Remediation (2026-10-03)**:
+    - **Queue Separation & Anti-Race Condition**: Bổ sung `NOTIFICATION_QUEUE_NAME = "events-notification-queue"` trong `EVENT_BUS_CONSTANTS`. `src/notification.server.ts` sử dụng `notificationEventBusWorker` lắng nghe chuyên biệt hàng đợi notification. `src/worker.server.ts` chỉ đăng ký `authCleanupSubscriber` và `storageCleanupSubscriber` khi `NOTIFICATION_SERVICE_STANDALONE=true`, triệt tiêu hoàn toàn race condition tranh chấp job BullMQ và nguy cơ mất mát sự kiện âm thầm (Silent Event Loss).
+    - **Maintenance Mode Enforcement**: Tích hợp `maintenanceGuard()` vào `src/notification.app.ts` bảo vệ toàn diện các endpoint notification trong chế độ bảo trì hệ thống; bổ sung endpoint public `/notifications/health`.
+    - **Transactional Outbox Atomicity**: Mở rộng `createVerificationToken` và `createDeactivationToken` trong `AuthRepository` nhận callback `afterCreate(tx)`, đảm bảo token và outbox event được ghi trong cùng một transaction tương tác nguyên tử.
+    - **Cross-Process Outbox Relay**: Trong `EventBusService.relayPendingOutboxEvents`, nếu process hiện tại không đăng ký local handler (ví dụ worker relay sự kiện của satellite notification-service), hệ thống tự động đẩy envelope vào BullMQ `events-notification-queue` để notification microservice tiêu thụ an toàn.
+    - **Environment Synchronization**: Đồng bộ `NOTIFICATION_SERVICE_STANDALONE: "true"` vào `app-worker` trong `docker-compose.dev.yml` và loại bỏ unused imports.
+
+- **Microservices Architecture: Phase 6 (File & Media Microservice Decoupling & Sharp Processing Engine) (2026-10-03)**:
+  - **Mục tiêu**: Bóc tách module Files & Storage thành Microservice vệ tinh thứ hai (`media-service`), tích hợp động cơ xử lý hình ảnh Sharp (WebP, AVIF, JPEG, PNG, crop/resize), mở rộng R2 Service hỗ trợ buffer operations, tự động hóa quét dọn tệp tin rác mồ côi (orphan & stale files cleanup), tích hợp Traefik API Gateway với priority 100, và duy trì mô hình tham chiếu Reference Key cho Core API.
+  - **1. Centralized Media Constants (`src/common/constants/media.constant.ts` & `audit-log.constant.ts`)**:
+    - `IMAGE_FORMAT`: `WEBP`, `JPEG`, `PNG`, `AVIF`.
+    - `IMAGE_FIT`: `COVER`, `CONTAIN`, `FILL`, `INSIDE`, `OUTSIDE`.
+    - `MEDIA_FOLDER`: `AVATARS`, `THUMBNAILS`, `GENERAL`, `TRANSFORMED`, `IMAGES`.
+    - `MEDIA_LIMITS`: `DEFAULT_QUALITY: 80`, `MIN_QUALITY: 10`, `MAX_QUALITY: 100`, `DEFAULT_AVATAR_SIZE: 256`, `DEFAULT_THUMBNAIL_WIDTH: 300`, `DEFAULT_THUMBNAIL_HEIGHT: 300`, `MAX_FILE_SIZE_BYTES: 15MB`, `UNCONFIRMED_CLEANUP_HOURS: 24`, `SOFT_DELETED_RETENTION_DAYS: 30`.
+    - Bổ sung `AUDIT_ACTION.UPLOAD_FILE` và `AUDIT_ACTION.CLEANUP_ORPHAN_FILES`.
+  - **2. High-Performance Image Processing Engine with Sharp (`src/common/services/image-processing.service.ts`)**:
+    - `validateImageBuffer`: Xác thực buffer ảnh hợp lệ, kiểm tra format/kích thước và phòng chống tấn công Decompression Bomb (`limitInputPixels`).
+    - `processImage`: Biến đổi kích thước, crop theo `fit`, nén theo `quality`, xoay theo EXIF, và chuyển đổi định dạng (mặc định WebP tối ưu hóa dung lượng).
+    - `generateAvatar`: Sinh avatar vuông chuẩn hóa WebP 256x256.
+    - `generateThumbnail`: Sinh ảnh thu nhỏ WebP (fit: inside) phục vụ preview nhanh.
+    - `isSupportedImageMime`: Hỗ trợ allowlist MIME types chuẩn (`image/jpeg`, `image/png`, `image/webp`, `image/avif`, `image/gif`, `image/tiff`).
+  - **3. R2 / S3 Buffer Streaming Operations (`src/common/services/r2.service.ts`)**:
+    - Bổ sung `uploadBuffer(key, buffer, contentType)`: Đẩy trực tiếp buffer đã nén/tối ưu lên Cloudflare R2 / S3.
+    - Bổ sung `getObjectBuffer(key)`: Nạp buffer tệp từ R2/S3 về bộ nhớ RAM phục vụ biến đổi ảnh (image transformation).
+  - **4. File Module Extension & APIs (`src/modules/files/`)**:
+    - `POST /api/v1/files/upload-image`: Tải lên và tối ưu hóa ảnh trực tiếp qua `multer` memory storage + Sharp, tạo bản ghi `FileRecord` với metadata chi tiết (`width`, `height`, `format`, `originalSize`, `compressedSize`, `compressionRatio`).
+    - `GET /api/v1/files/:id/transform`: Biến đổi ảnh hiện có trong hệ thống qua Sharp (hỗ trợ trả về buffer binary stream trực tiếp hoặc lưu thành tệp mới qua query `saveAsNew=true`).
+    - `POST /api/v1/files/cleanup`: API dọn dẹp các tệp mồ côi (unconfirmed quá 24h và soft-deleted quá hạn retention 30 ngày) cho Quản trị viên (`FILE_MANAGE`).
+    - Cập nhật DTOs (`file.dto.ts`), validation schemas (`file.validation.ts`), controller (`file.controller.ts`), và route (`file.route.ts`).
+  - **5. Standalone Media Microservice Application & Server (`src/media.app.ts` & `src/media.server.ts`)**:
+    - `src/media.app.ts`: Express application độc lập cho Media Microservice, tích hợp Helmet, CORS, Morgan logger, Request ID tracing, `maintenanceGuard()`, `rateLimitMiddleware`, `/health` và `/api/v1/files/health` loadbalancer endpoints, mount dual routes `/api/v1/files` và `/files`.
+    - `src/media.server.ts`: Server runtime độc lập lắng nghe cổng `8890` (`MEDIA_PORT`), nạp `storageCleanupSubscriber`, đăng ký graceful shutdown an toàn (SIGINT/SIGTERM).
+  - **6. Process Isolation & Subscriber Decoupling (`src/worker.server.ts` & `package.json`)**:
+    - Cập nhật `src/worker.server.ts`: Đăng ký `storageCleanupSubscriber` có điều kiện theo `!envConfig.media.standalone` (tránh chạy trùng lặp khi satellite media-service đã active).
+    - Thêm các lệnh `dev:media` và `start:media` vào `package.json`.
+  - **7. Traefik API Gateway Integration & Network Isolation (`docker-compose.yml` & `docker-compose.dev.yml`)**:
+    - Thêm container `media-service` trong `docker-compose.yml` thuộc mạng `internal_net`.
+    - Traefik labels: `PathPrefix('/api/v1/files')`, `priority: 100`, healthcheck `/health`, loadbalancer port `8890`.
+    - Thêm dev override trong `docker-compose.dev.yml` với hot-reload qua `ts-node-dev`.
+    - Cập nhật `src/config/env.config.ts` và `.env.example` với các biến: `MEDIA_PORT`, `MEDIA_SERVICE_STANDALONE`, `MEDIA_SERVICE_URL`.
+  - **8. Automated Testing & Verification (`tests/media-microservice-phase6.test.ts`)**:
+    - 26 test cases bao quát: Sharp engine, R2 buffer ops, mediaApp endpoints, direct image processing, transformation, orphan cleanup, Traefik & docker manifests.
+    - Toàn bộ automated test suite dự án đạt **556/556 tests pass 100%** (0 regressions).
+    - `pnpm build` (tsc 0 lỗi), `pnpm run lint` (0 error/warning), `pnpm exec prisma validate` (hợp lệ).
+  - **9. Open-Code-Review Hardening & Remediation (2026-10-03)**:
+    - **Vá BOLA / DoS Resource Exhaustion**: Trong `FileService.transformExistingImage`, bắt buộc xác thực `userId` và kiểm tra quyền `FILE_UPLOAD` / `FILE_MANAGE` khi `saveAsNew=true`, ngăn chặn tuyệt đối người dùng ẩn danh spam tạo tệp mới vào CSDL và R2.
+    - **Fast-fail MIME Validation**: Trong `transformExistingImage`, kiểm tra `isSupportedImageMime(file.mimeType)` trước khi tải buffer R2; bắt lỗi 404 nếu dữ liệu R2 bị thiếu.
+    - **Multer Memory & MIME Hardening**: Thêm `fileFilter` kiểm tra MIME types ảnh hợp lệ ở biên HTTP và sử dụng hằng số `MEDIA_LIMITS.MAX_FILE_SIZE_BYTES` thay cho magic numbers.
+    - **MulterError Handling**: Bổ sung xử lý tập trung `multer.MulterError` trong `src/middlewares/error.middleware.ts`, trả về mã lỗi 400 `VALIDATION_ERROR` thay vì rơi xuống 500.
+    - **Khắc phục Magic Strings**: Chuẩn hóa toàn bộ enums (`IMAGE_FIT`, `IMAGE_FORMAT`) và `MEDIA_FOLDER.IMAGES` trong `file.validation.ts`.
+    - **Controller Layer & Type-Safety**: `FileController.uploadImage` ném `AppError` chuyển cho error middleware thay vì tự trả JSON 400; loại bỏ `as any` và sử dụng `ImageTransformDto` cho query params.
+    - **Storage Rollback & Cleanup Resilience**: Thêm cơ chế rollback xóa file R2 nếu DB write lỗi trong `uploadAndProcessImage` và `transformExistingImage`; không xóa bản ghi CSDL nếu lệnh xóa file trên R2 gặp sự cố trong `cleanupOrphanFiles`.
+- **Live Server Integration & Full RBAC Synchronization (2026-10-03)**:
+  - Đồng bộ toàn bộ 34 quyền hệ thống vào `SYSTEM_PERMISSIONS` trong `prisma/seed.ts` (bổ sung `FILE_UPLOAD`, `FILE_READ`, `FILE_DELETE`, `FILE_MANAGE`, `SYSTEM_CONFIG_READ`, `SYSTEM_CONFIG_MANAGE`, `CRON_JOB_READ`, `CRON_JOB_MANAGE`, `USER_RESTORE`).
+  - Đã seed thành công vào PostgreSQL: 34 quyền cho vai trò `ADMIN`, 17 quyền cho `MANAGER`, 4 quyền cơ bản cho `USER`.
+  - Bộ kiểm thử tích hợp thực tế `tests/integration-live-server.test.ts` (gọi HTTP thật qua dev server ở cổng 9999 kết nối Supabase Postgres, Redis và Cloudflare R2): **24/24 tests PASS (100%)**.
+  - Xác nhận chức năng upload ảnh thật (tự động tối ưu WebP, lưu bucket Cloudflare R2, lưu metadata DB) và sinh Presigned URL hoạt động trơn tru.

@@ -1,0 +1,98 @@
+version: "3.8"
+
+# =============================================================================
+# Development Override — docker-compose.dev.yml
+# Dùng lệnh: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+# =============================================================================
+# Override dành riêng cho local dev:
+#   • Traefik dashboard expose không cần auth
+#   • Không bật HTTPS / ACME (chỉ HTTP :80)
+#   • Mount source code (hot-reload với ts-node-dev)
+#   • Redis expose ra localhost để debug
+#   • App ports expose trực tiếp (bypass gateway nếu cần test)
+# =============================================================================
+
+services:
+  traefik:
+    command:
+      - "--api.insecure=true" # Dashboard không cần auth trong dev
+      - "--api.dashboard=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=${COMPOSE_PROJECT_NAME:-template-be}_internal_net"
+      - "--providers.file.filename=/etc/traefik/dynamic.yml"
+      - "--providers.file.watch=true"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--log.level=DEBUG"
+      - "--accesslog=true"
+      - "--ping=true"
+      # KHÔNG bật ACME / Let's Encrypt trong dev
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080" # Dashboard tại http://localhost:8080
+    # Override volume — không cần certs volume trong dev
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/traefik.dev.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+
+  redis:
+    # Trong dev, expose Redis để dễ debug với RedisInsight / CLI
+    ports:
+      - "${REDIS_PORT:-6381}:6379"
+
+  app-api:
+    # Trong dev, expose port trực tiếp để bypass gateway khi debug
+    ports:
+      - "${PORT:-9999}:${PORT:-9999}"
+    environment:
+      NODE_ENV: "development"
+      TRUST_PROXY: "false" # Dev: không trust proxy (debug trực tiếp)
+    # Mount source code và sử dụng ts-node-dev cho hot-reload
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/dist
+    command: ["pnpm", "dev"]
+
+  # Worker trong dev cũng dùng ts-node-dev nếu cần debug
+  app-worker:
+    environment:
+      NODE_ENV: "development"
+      NOTIFICATION_SERVICE_STANDALONE: "true"
+      MEDIA_SERVICE_STANDALONE: "true"
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/dist
+    command: ["pnpm", "dev:worker"]
+
+  # Notification Microservice trong dev (hot-reload qua ts-node-dev)
+  notification-service:
+    ports:
+      - "${NOTIFICATION_PORT:-8889}:${NOTIFICATION_PORT:-8889}"
+    environment:
+      NODE_ENV: "development"
+      TRUST_PROXY: "false"
+      NOTIFICATION_SERVICE_STANDALONE: "true"
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/dist
+    command: ["pnpm", "dev:notification"]
+
+  # Media & File Storage Microservice trong dev (hot-reload qua ts-node-dev)
+  media-service:
+    ports:
+      - "${MEDIA_PORT:-8890}:${MEDIA_PORT:-8890}"
+    environment:
+      NODE_ENV: "development"
+      TRUST_PROXY: "false"
+      MEDIA_SERVICE_STANDALONE: "true"
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/dist
+    command: ["pnpm", "dev:media"]

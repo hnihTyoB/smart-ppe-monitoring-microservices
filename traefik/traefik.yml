@@ -1,0 +1,94 @@
+# =============================================================================
+# Traefik v3 - Static Configuration
+# File: traefik/traefik.yml
+# =============================================================================
+# Cấu hình tĩnh (yêu cầu restart Traefik khi thay đổi).
+# Cấu hình động (middlewares, routing rules) → dynamic.yml (hot-reload).
+# =============================================================================
+
+# ── Global ──────────────────────────────────────────────────────────────────
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+# ── API & Dashboard ──────────────────────────────────────────────────────────
+# BẮT BUỘC tắt dashboard.insecure trong production
+api:
+  dashboard: true
+  insecure: false # Tắt insecure dashboard trong production. Chỉ bật trong traefik.dev.yml
+
+# ── Ping Healthcheck ─────────────────────────────────────────────────────────
+ping: {}
+
+# ── Logging ──────────────────────────────────────────────────────────────────
+log:
+  level: INFO # Options: DEBUG, INFO, WARN, ERROR
+  format: json # json | common (dùng json để tích hợp log aggregator)
+
+# Access log — ghi chi tiết từng request (bật ở production để audit)
+accessLog:
+  format: json
+  fields:
+    defaultMode: keep
+    headers:
+      defaultMode: drop
+      names:
+        # Chỉ log các header không nhạy cảm
+        X-Request-Id: keep
+        X-Forwarded-For: keep
+        User-Agent: keep
+
+# ── Entrypoints ───────────────────────────────────────────────────────────────
+entryPoints:
+  web:
+    address: ":80"
+
+  websecure:
+    address: ":443"
+    http:
+      tls:
+        certResolver: letsencrypt
+        domains:
+          # Thay bằng domain thực của bạn trong production
+          - main: "example.com"
+            sans:
+              - "www.example.com"
+
+  # Dashboard metrics endpoint
+  metrics:
+    address: ":8082"
+
+# ── Providers ────────────────────────────────────────────────────────────────
+providers:
+  # Docker provider: tự động discover services từ labels
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false # Chỉ expose service có label traefik.enable=true
+    network: internal_net # Network mặc định để Traefik giao tiếp với services
+    watch: true # Hot-reload khi có container mới
+
+  # File provider: cấu hình động (middlewares, routing rules)
+  file:
+    filename: "/etc/traefik/dynamic.yml"
+    watch: true # Hot-reload khi dynamic.yml thay đổi
+
+# ── TLS & Let's Encrypt (ACME) ────────────────────────────────────────────────
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      # BẮT BUỘC thay bằng email thực của bạn
+      email: "admin@example.com"
+      storage: "/certs/acme.json"
+      # HTTP Challenge (đơn giản nhất, không cần DNS provider)
+      httpChallenge:
+        entryPoint: web
+      # Hoặc dùng TLS Challenge:
+      # tlsChallenge: {}
+
+# ── Metrics (Prometheus) ─────────────────────────────────────────────────────
+# Bật nếu cần tích hợp Prometheus/Grafana monitoring
+# metrics:
+#   prometheus:
+#     entryPoint: metrics
+#     addEntryPointsLabels: true
+#     addServicesLabels: true

@@ -1,0 +1,14 @@
+name = "template-be"
+main = "dist/server.js"
+compatibility_date = "2024-09-01"
+
+# Environment variables that do NOT contain secrets
+[vars]
+NODE_ENV = "production"
+
+# BẢO MẬT: Tuyệt đối không lưu DATABASE_URL hoặc credentials mật khẩu rõ trong file này.
+# Đối với môi trường phát triển cục bộ với Wrangler, sử dụng file .dev.vars (dựa trên .dev.vars.example).
+# Đối với môi trường Cloudflare Production, thiết lập Encrypted Secrets qua Cloudflare Dashboard / CLI:
+#   npx wrangler secret put DATABASE_URL
+#   npx wrangler secret put JWT_ACCESS_SECRET
+#   npx wrangler secret put JWT_REFRESH_SECRET

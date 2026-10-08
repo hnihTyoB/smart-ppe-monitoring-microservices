@@ -1,0 +1,12 @@
+# ==============================================================================
+# Cloudflare Wrangler Local Development Secrets
+# Copy file này thành .dev.vars để sử dụng khi chạy `npx wrangler dev`.
+# CẢNH BÁO: Không bao giờ commit file .dev.vars chứa credentials thật lên Git repository!
+# ==============================================================================
+
+DATABASE_URL="postgresql://postgres:postgres@localhost:5432/template_db?schema=public"
+DIRECT_URL="postgresql://postgres:postgres@localhost:5432/template_db?schema=public"
+
+JWT_ACCESS_SECRET="example_jwt_access_secret_min_32_characters_long_for_dev"
+JWT_REFRESH_SECRET="example_jwt_refresh_secret_min_32_characters_long_for_dev"
+ENCRYPTION_KEY="example_encryption_key_min_32_chars_for_local_testing"

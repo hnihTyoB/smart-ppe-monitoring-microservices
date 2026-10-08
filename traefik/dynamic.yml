@@ -1,0 +1,112 @@
+# =============================================================================
+# Traefik v3 - Dynamic Configuration (Hot-Reload)
+# File: traefik/dynamic.yml
+# =============================================================================
+# Cấu hình động — Traefik tự reload khi file này thay đổi (không cần restart).
+# Định nghĩa:
+#   • Middlewares: security-headers, global-ratelimit, request-id, inject-gateway-secret
+#   • TLS options (TLS 1.3 minimum)
+#   • (Tùy chọn) Router và Service tĩnh nếu không dùng Docker labels
+# =============================================================================
+
+http:
+  middlewares:
+    # ── 1. Security Headers ──────────────────────────────────────────────────
+    # Inject các HTTP security headers chuẩn vào mọi response.
+    # Tương tự helmet.js nhưng hoạt động ở gateway level (trước app-api).
+    security-headers:
+      headers:
+        # Ngăn browser thực thi tài nguyên từ các nguồn không rõ
+        contentTypeNosniff: true
+        # Bật X-XSS-Protection (cho browser cũ)
+        browserXssFilter: true
+        # Chặn framing từ domain khác (clickjacking protection)
+        frameDeny: true
+        # Bảo vệ referrer-policy
+        referrerPolicy: "strict-origin-when-cross-origin"
+        # HSTS: buộc HTTPS trong 1 năm (bật sau khi SSL hoạt động ổn định)
+        # forceSTSHeader: true
+        # stsSeconds: 31536000
+        # stsIncludeSubdomains: true
+        # stsPreload: true
+        # Permissions Policy: giới hạn quyền truy cập browser APIs
+        permissionsPolicy: "camera=(), microphone=(), geolocation=(), payment=()"
+        customResponseHeaders:
+          # Xóa header tiết lộ thông tin server
+          X-Powered-By: ""
+          Server: ""
+
+    # ── 2. Global Rate Limiting ───────────────────────────────────────────────
+    # Giới hạn tốc độ toàn cục tại gateway layer (trước khi request chạm app-api).
+    # Bổ sung thêm vào rate limiting tại application layer (rate-limit.middleware.ts).
+    # average: số request được phép trong 1 giây (sustained rate)
+    # burst: số request được phép tăng đột biến tạm thời
+    global-ratelimit:
+      rateLimit:
+        # 100 req/s sustained, burst tối đa 200 req
+        average: 100
+        burst: 200
+        # Xác định client qua IP + path prefix
+        sourceCriterion:
+          ipStrategy:
+            # Số hop proxy để skip khi đọc IP thật
+            # 1 = trust 1 hop (Traefik là hop đầu tiên)
+            depth: 1
+
+    # ── 3. Request ID Injection ────────────────────────────────────────────────
+    # Traefik tự động inject X-Request-Id vào mọi request nếu chưa có.
+    # Sử dụng UUID v4 tích hợp sẵn trong Traefik.
+    # Application layer (request-id.middleware.ts) sẽ nhận header này và forward.
+    request-id:
+      headers:
+        customRequestHeaders:
+          # Traefik sẽ sinh UUID nếu header chưa có
+          X-Request-Id: "" # empty = Traefik auto-generates only if absent
+
+    # ── 4. Gateway Secret Injection ───────────────────────────────────────────
+    # Inject x-gateway-secret header nội bộ vào request từ Traefik đến app-api.
+    # LƯU Ý KIẾN TRÚC: Traefik dynamic file provider không tự động nội suy biến shell ${VAR}.
+    # Để an toàn và nạp đúng GATEWAY_INTERNAL_SECRET từ .env, middleware này được khai báo
+    # chính thức qua Docker Compose labels trong docker-compose.yml.
+    # Khai báo dưới đây dùng làm fallback hoặc tài liệu tham khảo cho file provider.
+    inject-gateway-secret:
+      headers:
+        customRequestHeaders:
+          X-Gateway-Secret: "gateway-internal-secret-placeholder"
+
+    # ── 5. Strip /api/v1 Prefix (tuỳ chọn — hiện tại giữ prefix) ─────────────
+    # Bỏ comment nếu muốn Traefik strip prefix trước khi forward sang service
+    # strip-api-prefix:
+    #   stripPrefix:
+    #     prefixes:
+    #       - "/api/v1"
+
+    # ── 6. Compress Response ──────────────────────────────────────────────────
+    compress-response:
+      compress:
+        minResponseBodyBytes: 1024
+
+    # ── 7. Retry on 5xx (tuỳ chọn) ───────────────────────────────────────────
+    # retry-on-error:
+    #   retry:
+    #     attempts: 2
+    #     initialInterval: 100ms
+
+# ── TLS Options ──────────────────────────────────────────────────────────────
+tls:
+  options:
+    # TLS 1.3 only (TLS 1.2 hỗ trợ tương thích ngược với cipher suite mạnh)
+    default:
+      minVersion: VersionTLS12
+      cipherSuites:
+        - TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+        - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        - TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+        - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+        - TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305
+        - TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305
+      sniStrict: true
+    # TLS 1.3 strict (dùng cho modern clients)
+    modern:
+      minVersion: VersionTLS13
+      sniStrict: true

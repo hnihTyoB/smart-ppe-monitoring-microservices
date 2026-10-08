@@ -1,0 +1,294 @@
+version: "3.8"
+
+# =============================================================================
+# Phase 4: API Gateway & Reverse Proxy với Traefik v3
+# =============================================================================
+# Traefik đảm nhiệm toàn bộ biên giới hệ thống:
+#   • SSL/TLS Termination (Let's Encrypt ACME) trong production
+#   • Routing: /api/v1/auth/* → app-api, /api/v1/files/* → app-api, v.v.
+#   • Global Rate Limiting (100 req/s burst, 50 req/s sustained)
+#   • Tự động inject X-Request-Id (UUIDv4 — Traefik native) và x-gateway-secret
+#   • Cloudflare Turnstile: xác thực được xử lý ở application layer
+#   • Dashboard: http://localhost:8080 (chỉ expose trong dev, tắt trong production)
+#
+# Kiến trúc internal network:
+#   Internet → Traefik (:80/:443) → app-api (:9999) / app-worker (không expose)
+#   Redis, Postgres: không expose ra ngoài, chỉ dùng trong docker internal network
+# =============================================================================
+
+services:
+  # ── Layer 0: API Gateway / Reverse Proxy ──────────────────────────────────
+  traefik:
+    image: traefik:v3.3
+    container_name: app_gateway
+    restart: unless-stopped
+    ports:
+      - "80:80" # HTTP (redirect sang HTTPS trong production)
+      - "443:443" # HTTPS (TLS termination)
+    volumes:
+      # Cấp quyền đọc Docker socket để tự động discover services
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # File cấu hình tĩnh Traefik
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      # File cấu hình động (middlewares, routing rules)
+      - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+      # Thư mục lưu TLS certs Let's Encrypt (chỉ production)
+      - traefik_certs:/certs
+    environment:
+      # Truyền secret nội bộ để inject vào header x-gateway-secret
+      GATEWAY_INTERNAL_SECRET: "${GATEWAY_INTERNAL_SECRET:-}"
+    networks:
+      - gateway_net
+      - internal_net
+    labels:
+      - "traefik.enable=true"
+      # Dashboard route (chỉ dùng dev)
+      - "traefik.http.routers.dashboard.rule=Host(`traefik.localhost`)"
+      - "traefik.http.routers.dashboard.service=api@internal"
+      - "traefik.http.routers.dashboard.middlewares=dashboard-auth"
+      # Basic auth cho dashboard: admin/admin (chỉ dev — trong prod dùng .env)
+      - "traefik.http.middlewares.dashboard-auth.basicauth.users=admin:$$apr1$$xyz$$placeholder"
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ── Layer 1: Redis (Message Broker & Cache) ────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: app_redis
+    restart: unless-stopped
+    networks:
+      - internal_net
+    # Redis KHÔNG expose ra ngoài (chỉ internal)
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  # ── Layer 2a: API Server (HTTP Requests Only) ──────────────────────────────
+  app-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: app_api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: "${NODE_ENV:-production}"
+      PORT: "${PORT:-9999}"
+      DATABASE_URL: "${DATABASE_URL}"
+      REDIS_URL: ""
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
+      # Trust Traefik như một hop proxy
+      TRUST_PROXY: "1"
+      # Gateway secret để verify request từ Traefik
+      GATEWAY_INTERNAL_SECRET: "${GATEWAY_INTERNAL_SECRET:-}"
+    # app-api KHÔNG expose port ra ngoài — chỉ Traefik mới được gọi
+    volumes:
+      - ./keys:/app/keys:ro
+    expose:
+      - "${PORT:-9999}"
+    depends_on:
+      redis:
+        condition: service_healthy
+      traefik:
+        condition: service_healthy
+    networks:
+      - internal_net
+    command: ["node", "dist/api.server.js"]
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'node -e "require(''http'').get(''http://localhost:${PORT:-9999}/api/v1/health'', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on(''error'', () => process.exit(1))"',
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=internal_net"
+      # ── Router: API routes ──────────────────────────────────────────────────
+      - "traefik.http.routers.app-api.rule=PathPrefix(`/api/v1`) || PathPrefix(`/.well-known`) || PathPrefix(`/api/docs`)"
+      - "traefik.http.routers.app-api.entrypoints=web,websecure"
+      # ── Service: backend port ───────────────────────────────────────────────
+      - "traefik.http.services.app-api.loadbalancer.server.port=${PORT:-9999}"
+      - "traefik.http.services.app-api.loadbalancer.healthcheck.path=/api/v1/health"
+      - "traefik.http.services.app-api.loadbalancer.healthcheck.interval=30s"
+      # ── Middleware chain: security headers → rate limit → request ID → gateway secret ──
+      # Định nghĩa inject-gateway-secret qua Docker labels để Docker Compose interpolate ${GATEWAY_INTERNAL_SECRET}
+      - "traefik.http.middlewares.inject-gateway-secret.headers.customrequestheaders.X-Gateway-Secret=${GATEWAY_INTERNAL_SECRET:-}"
+      - "traefik.http.routers.app-api.middlewares=security-headers@file,global-ratelimit@file,request-id@file,inject-gateway-secret"
+
+  # ── Layer 2b: Background Worker (BullMQ Queues & Cron) ────────────────────
+  app-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: app_worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: "${NODE_ENV:-production}"
+      DATABASE_URL: "${DATABASE_URL}"
+      REDIS_URL: ""
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
+      NOTIFICATION_SERVICE_STANDALONE: "true"
+      MEDIA_SERVICE_STANDALONE: "true"
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./keys:/app/keys:ro
+    networks:
+      - internal_net
+    # Worker KHÔNG expose port (không nhận HTTP) — không có Traefik label
+    command: ["node", "dist/worker.server.js"]
+
+  # ── Layer 2c: Notification Microservice (Phase 5: Satellite Service) ──────
+  notification-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: notification_service
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: "${NODE_ENV:-production}"
+      PORT: "${NOTIFICATION_PORT:-8889}"
+      DATABASE_URL: "${DATABASE_URL}"
+      REDIS_URL: ""
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
+      TRUST_PROXY: "1"
+      GATEWAY_INTERNAL_SECRET: "${GATEWAY_INTERNAL_SECRET:-}"
+      NOTIFICATION_SERVICE_STANDALONE: "true"
+      AUTH_JWKS_URL: "http://app-api:9999/.well-known/jwks.json"
+    volumes:
+      - ./keys:/app/keys:ro
+    expose:
+      - "${NOTIFICATION_PORT:-8889}"
+    depends_on:
+      redis:
+        condition: service_healthy
+      traefik:
+        condition: service_healthy
+    networks:
+      - internal_net
+    command: ["node", "dist/notification.server.js"]
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'node -e "require(''http'').get(''http://localhost:${NOTIFICATION_PORT:-8889}/health'', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on(''error'', () => process.exit(1))"',
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=internal_net"
+      # ── Router: Notification Microservice Routes (Priority 100 > app-api catch-all) ──
+      - "traefik.http.routers.notifications.rule=PathPrefix(`/api/v1/notifications`)"
+      - "traefik.http.routers.notifications.priority=100"
+      - "traefik.http.routers.notifications.entrypoints=web,websecure"
+      # ── Service: Notification Service Port & Healthcheck ──────────────────
+      - "traefik.http.services.notifications.loadbalancer.server.port=${NOTIFICATION_PORT:-8889}"
+      - "traefik.http.services.notifications.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.notifications.loadbalancer.healthcheck.interval=30s"
+      # ── Middleware chain ──────────────────────────────────────────────────
+      - "traefik.http.routers.notifications.middlewares=security-headers@file,global-ratelimit@file,request-id@file,inject-gateway-secret"
+
+  # ── Layer 2d: Media & Storage Microservice (Phase 6: Satellite Service) ──
+  media-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: media_service
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: "${NODE_ENV:-production}"
+      PORT: "${MEDIA_PORT:-8890}"
+      DATABASE_URL: "${DATABASE_URL}"
+      REDIS_URL: ""
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
+      TRUST_PROXY: "1"
+      GATEWAY_INTERNAL_SECRET: "${GATEWAY_INTERNAL_SECRET:-}"
+      MEDIA_SERVICE_STANDALONE: "true"
+      AUTH_JWKS_URL: "http://app-api:9999/.well-known/jwks.json"
+      R2_ACCOUNT_ID: "${R2_ACCOUNT_ID:-}"
+      R2_BUCKET_NAME: "${R2_BUCKET_NAME:-}"
+      R2_ACCESS_KEY_ID: "${R2_ACCESS_KEY_ID:-}"
+      R2_SECRET_ACCESS_KEY: "${R2_SECRET_ACCESS_KEY:-}"
+      R2_PUBLIC_BASE_URL: "${R2_PUBLIC_BASE_URL:-}"
+    volumes:
+      - ./keys:/app/keys:ro
+    expose:
+      - "${MEDIA_PORT:-8890}"
+    depends_on:
+      redis:
+        condition: service_healthy
+      traefik:
+        condition: service_healthy
+    networks:
+      - internal_net
+    command: ["node", "dist/media.server.js"]
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'node -e "require(''http'').get(''http://localhost:${MEDIA_PORT:-8890}/health'', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on(''error'', () => process.exit(1))"',
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=internal_net"
+      # ── Router: Media Microservice Routes (Priority 100 > app-api catch-all) ──
+      - "traefik.http.routers.media.rule=PathPrefix(`/api/v1/files`)"
+      - "traefik.http.routers.media.priority=100"
+      - "traefik.http.routers.media.entrypoints=web,websecure"
+      # ── Service: Media Service Port & Healthcheck ──────────────────────────
+      - "traefik.http.services.media.loadbalancer.server.port=${MEDIA_PORT:-8890}"
+      - "traefik.http.services.media.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.media.loadbalancer.healthcheck.interval=30s"
+      # ── Middleware chain ──────────────────────────────────────────────────
+      - "traefik.http.routers.media.middlewares=security-headers@file,global-ratelimit@file,request-id@file,inject-gateway-secret"
+
+networks:
+  # Network expose ra ngoài (Traefik <-> Internet)
+  gateway_net:
+    driver: bridge
+  # Network nội bộ (app-api, app-worker, redis)
+  internal_net:
+    name: internal_net
+    driver: bridge
+
+volumes:
+  redis_data:
+    driver: local
+  traefik_certs:
+    driver: local

@@ -1,0 +1,40 @@
+# =============================================================================
+# Traefik v3 - Static Configuration (Development)
+# File: traefik/traefik.dev.yml
+# Chỉ dùng trong local development — KHÔNG dùng trong production.
+# =============================================================================
+
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+api:
+  dashboard: true
+  insecure: true # Dashboard tại http://localhost:8080 không cần auth (chỉ dev)
+
+ping: {}
+
+log:
+  level: DEBUG
+  format: common # Dễ đọc hơn json trong terminal dev
+
+accessLog:
+  format: common
+
+entryPoints:
+  web:
+    address: ":80"
+    # Không redirect HTTP → HTTPS trong dev
+  websecure:
+    address: ":443"
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+    watch: true
+  file:
+    filename: "/etc/traefik/dynamic.yml"
+    watch: true
+
+# Không cần ACME / Let's Encrypt trong dev
