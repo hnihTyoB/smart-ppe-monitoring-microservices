@@ -1,0 +1,131 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../node_modules/@prisma/client-reporting"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("REPORTING_DATABASE_URL")
+}
+
+model ReportTemplate {
+  id          String   @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  name        String   @db.VarChar(150)
+  code        String   @unique @db.VarChar(50)
+  description String?  @db.Text
+  filePath    String?  @map("file_path") @db.Text
+  fileName    String?  @map("file_name") @db.VarChar(255)
+  fileType    String   @default("PDF") @map("file_type") @db.VarChar(30)
+  version     String   @default("1.0.0") @db.VarChar(30)
+  status      String   @default("ACTIVE") @db.VarChar(30)
+  createdBy   String?  @map("created_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  generations ReportGeneration[]
+
+  @@map("report_templates")
+}
+
+model ReportGeneration {
+  id           String   @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  templateId   String   @map("template_id") @db.Uuid
+  siteId       String   @map("site_id") @db.Uuid
+  reportType   String   @map("report_type") @db.VarChar(50)
+  periodStart  DateTime @map("period_start") @db.Date
+  periodEnd    DateTime @map("period_end") @db.Date
+  generatedBy  String   @map("generated_by") @db.Uuid
+  status       String   @default("COMPLETED") @db.VarChar(30)
+  filePath     String?  @map("file_path") @db.Text
+  fileName     String?  @map("file_name") @db.VarChar(255)
+  errorMessage String?  @map("error_message") @db.Text
+  generatedAt  DateTime @default(now()) @map("generated_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  template ReportTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@index([siteId, generatedAt])
+  @@map("report_generations")
+}
+
+model ReportStatistic {
+  id             String   @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  siteId         String   @map("site_id") @db.Uuid
+  cameraId       String?  @map("camera_id") @db.Uuid
+  violationType  String   @map("violation_type") @db.VarChar(50)
+  severity       String   @db.VarChar(30)
+  statDate       DateTime @map("stat_date") @db.Date
+  totalCount     Int      @default(0) @map("total_count")
+  confirmedCount Int      @default(0) @map("confirmed_count")
+  resolvedCount  Int      @default(0) @map("resolved_count")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@index([siteId, statDate])
+  @@map("report_statistics")
+}
+
+model IncidentStatistic {
+  id                String   @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  siteId            String   @map("site_id") @db.Uuid
+  statDate          DateTime @map("stat_date") @db.Date
+  totalIncidents    Int      @default(0) @map("total_incidents")
+  openIncidents     Int      @default(0) @map("open_incidents")
+  resolvedIncidents Int      @default(0) @map("resolved_incidents")
+  falseAlarms       Int      @default(0) @map("false_alarms")
+  trueViolations    Int      @default(0) @map("true_violations")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@unique([siteId, statDate])
+  @@map("incident_statistics")
+}
+
+model AiPerformanceStatistic {
+  id             String   @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  cameraId       String   @map("camera_id") @db.Uuid
+  modelVersionId String?  @map("model_version_id") @db.Uuid
+  statDate       DateTime @map("stat_date") @db.Date
+  avgFps         Decimal  @default(0) @map("avg_fps") @db.Decimal(6, 2)
+  avgLatencyMs   Decimal  @default(0) @map("avg_latency_ms") @db.Decimal(10, 2)
+  maxLatencyMs   Int      @default(0) @map("max_latency_ms")
+  totalFrames    BigInt   @default(0) @map("total_frames")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@index([cameraId, statDate])
+  @@map("ai_performance_statistics")
+}
+
+model AiModel {
+  id          String   @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  name        String   @db.VarChar(150)
+  code        String   @unique @db.VarChar(50)
+  modelType   String   @map("model_type") @db.VarChar(50)
+  description String?  @db.Text
+  status      String   @default("ACTIVE") @db.VarChar(30)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  versions AiModelVersion[]
+
+  @@map("ai_models")
+}
+
+model AiModelVersion {
+  id         String    @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  modelId    String    @map("model_id") @db.Uuid
+  version    String    @db.VarChar(30)
+  modelPath  String?   @map("model_path") @db.Text
+  framework  String    @default("PyTorch") @db.VarChar(50)
+  inputSize  String    @default("640x640") @map("input_size") @db.VarChar(30)
+  status     String    @default("DEPLOYED") @db.VarChar(30)
+  metrics    Json?
+  deployedAt DateTime? @map("deployed_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  model AiModel @relation(fields: [modelId], references: [id], onDelete: Cascade)
+
+  @@index([modelId])
+  @@map("ai_model_versions")
+}

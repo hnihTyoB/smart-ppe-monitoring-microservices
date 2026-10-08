@@ -32,6 +32,8 @@ services:
       - "80:80"
       - "443:443"
       - "8080:8080" # Dashboard tại http://localhost:8080
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # Override volume — không cần certs volume trong dev
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro

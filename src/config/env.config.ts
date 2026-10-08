@@ -9,8 +9,16 @@ const envSchema = z
       .default("development"),
     PORT: z.coerce.number().int().positive().default(9999),
 
-    // ── Database ─────────────────────────────────────────────────────────────
-    DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
+    // ── Database (Database-per-Service Architecture) ─────────────────────────
+    IDENTITY_DATABASE_URL: z
+      .string()
+      .min(1, "IDENTITY_DATABASE_URL is required"),
+    // Các service DB URLs — optional vì không phải service nào cũng active đồng thời
+    SITE_DATABASE_URL: z.string().optional(),
+    CAMERA_DATABASE_URL: z.string().optional(),
+    INCIDENT_DATABASE_URL: z.string().optional(),
+    NOTIFICATION_DATABASE_URL: z.string().optional(),
+    REPORTING_DATABASE_URL: z.string().optional(),
 
     // ── JWT ──────────────────────────────────────────────────────────────────
     JWT_ALGORITHM: z.enum(["RS256", "HS256"]).default("RS256"),
@@ -332,7 +340,12 @@ export const envConfig = {
   nodeEnv: _env.NODE_ENV,
   port: _env.PORT,
   database: {
-    url: _env.DATABASE_URL,
+    url: _env.IDENTITY_DATABASE_URL,
+    siteUrl: _env.SITE_DATABASE_URL,
+    cameraUrl: _env.CAMERA_DATABASE_URL,
+    incidentUrl: _env.INCIDENT_DATABASE_URL,
+    notificationUrl: _env.NOTIFICATION_DATABASE_URL,
+    reportingUrl: _env.REPORTING_DATABASE_URL,
   },
   jwt: {
     algorithm: _env.JWT_ALGORITHM,

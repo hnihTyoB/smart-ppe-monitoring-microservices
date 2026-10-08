@@ -28,17 +28,23 @@ try {
   }
 }
 
-if (!process.env.DATABASE_URL) {
+if (!process.env.IDENTITY_DATABASE_URL) {
   const password = encodeURIComponent(process.env.DB_PASSWORD || "");
   const user = encodeURIComponent(process.env.DB_USER || "postgres");
-  process.env.DATABASE_URL = `postgresql://${user}:${password}@${process.env.DB_HOST || "localhost"}:${process.env.DB_PORT || "5432"}/${process.env.DB_NAME || "template_db"}?schema=public`;
+  process.env.IDENTITY_DATABASE_URL = `postgresql://${user}:${password}@${process.env.DB_HOST || "localhost"}:${process.env.DB_PORT || "5432"}/${process.env.DB_NAME || "ppe_identity_db"}?schema=public`;
 }
 
-if (!process.env.DIRECT_URL && process.env.DATABASE_URL) {
-  process.env.DIRECT_URL = process.env.DATABASE_URL;
+if (!process.env.DIRECT_URL && process.env.IDENTITY_DATABASE_URL) {
+  process.env.DIRECT_URL = process.env.IDENTITY_DATABASE_URL;
 }
 
-const args = process.argv.slice(2);
+let args = process.argv.slice(2);
+if (!args.some((a) => a.startsWith("--schema"))) {
+  const identitySchema = path.resolve(__dirname, "../prisma/identity/schema.prisma");
+  if (fs.existsSync(identitySchema)) {
+    args.push("--schema=prisma/identity/schema.prisma");
+  }
+}
 
 let prismaBin;
 try {

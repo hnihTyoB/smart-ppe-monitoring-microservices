@@ -25,6 +25,8 @@ services:
     ports:
       - "80:80" # HTTP (redirect sang HTTPS trong production)
       - "443:443" # HTTPS (TLS termination)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       # Cấp quyền đọc Docker socket để tự động discover services
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -84,7 +86,7 @@ services:
     environment:
       NODE_ENV: "${NODE_ENV:-production}"
       PORT: "${PORT:-9999}"
-      DATABASE_URL: "${DATABASE_URL}"
+      IDENTITY_DATABASE_URL: "${IDENTITY_DATABASE_URL}"
       REDIS_URL: ""
       REDIS_HOST: redis
       REDIS_PORT: "6379"
@@ -142,7 +144,7 @@ services:
       - .env
     environment:
       NODE_ENV: "${NODE_ENV:-production}"
-      DATABASE_URL: "${DATABASE_URL}"
+      IDENTITY_DATABASE_URL: "${IDENTITY_DATABASE_URL}"
       REDIS_URL: ""
       REDIS_HOST: redis
       REDIS_PORT: "6379"
@@ -171,7 +173,7 @@ services:
     environment:
       NODE_ENV: "${NODE_ENV:-production}"
       PORT: "${NOTIFICATION_PORT:-8889}"
-      DATABASE_URL: "${DATABASE_URL}"
+      NOTIFICATION_DATABASE_URL: "${NOTIFICATION_DATABASE_URL}"
       REDIS_URL: ""
       REDIS_HOST: redis
       REDIS_PORT: "6379"
@@ -228,7 +230,7 @@ services:
     environment:
       NODE_ENV: "${NODE_ENV:-production}"
       PORT: "${MEDIA_PORT:-8890}"
-      DATABASE_URL: "${DATABASE_URL}"
+      MEDIA_DATABASE_URL: "${MEDIA_DATABASE_URL}"
       REDIS_URL: ""
       REDIS_HOST: redis
       REDIS_PORT: "6379"

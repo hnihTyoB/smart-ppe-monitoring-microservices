@@ -4,6 +4,7 @@ export default [
       "dist/**",
       "node_modules/**",
       "prisma/migrations/**",
+      "prisma/**/migrations/**",
       "scripts/**",
       "*.js",
     ],

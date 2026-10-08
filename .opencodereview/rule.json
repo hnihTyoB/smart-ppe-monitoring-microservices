@@ -1,0 +1,34 @@
+{
+  "rules": [
+    {
+      "path": "src/**/*.ts",
+      "rule": "Enforce strict layered architecture: route -> validation (Zod middleware) -> controller -> service -> repository. Business logic must NOT be in controller. Zod validation must be at HTTP boundary (req.body/query/params). All business constants (actions, permissions, error codes, role names) MUST use src/common/constants/ as const objects, never magic strings. All AppError must use ERROR_CODE enum. No raw database queries outside repository layer. Check for sensitive data leaks (JWT secrets, DB credentials, API keys) in responses or logs.",
+      "merge_system_rule": true
+    },
+    {
+      "path": "src/database/*.ts",
+      "rule": "Database client files must only export Prisma client instances. No business logic. No raw env access except NODE_ENV for log level.",
+      "merge_system_rule": true
+    },
+    {
+      "path": "src/common/types/*.ts",
+      "rule": "Type definitions must be pure TypeScript interfaces/types. No runtime logic. Check for type mismatches between Kafka event schemas (kafka-event.schema.ts) and TypeScript types (event.type.ts / kafka-event.type.ts). Ensure payload field names match between schema and type.",
+      "merge_system_rule": true
+    },
+    {
+      "path": "src/common/validations/*.ts",
+      "rule": "Zod schemas must be strict and complete. Check for: missing .min(1) on required strings, missing .uuid() on ID fields that should be UUIDs, overly permissive z.unknown() or z.any(). Ensure validation schemas are exported and actually used in route middleware.",
+      "merge_system_rule": true
+    },
+    {
+      "path": "traefik/*.yml",
+      "rule": "CRITICAL: Check for hardcoded secrets or credentials in traefik config files. All secrets must use environment variable placeholders, not literal values. Check that internal routing rules do not accidentally expose admin endpoints publicly.",
+      "merge_system_rule": false
+    },
+    {
+      "path": "scripts/*.js",
+      "rule": "Scripts must not log or expose secrets. Environment variables must be loaded safely. Check for hardcoded fallback secrets that could end up in production configs.",
+      "merge_system_rule": true
+    }
+  ]
+}

@@ -1,5 +1,14 @@
 import { EventName } from "../constants/event.constant";
 
+// Canonical PPE event types — derived from Zod schemas (single source of truth).
+// Import directly from kafka-event.type.ts for full payload access.
+export type {
+  PPEViolationDetectedPayload,
+  PPEIncidentResolvedPayload,
+  PPECameraStatusChangedPayload,
+  PPESiteAlertTriggeredPayload,
+} from "./kafka-event.type";
+
 export interface UserRegisteredPayload {
   userId: string;
   email: string;
@@ -48,6 +57,13 @@ export interface FileUploadedUnconfirmedPayload {
   expiresAt: string | Date;
 }
 
+import type {
+  PPEViolationDetectedPayload,
+  PPEIncidentResolvedPayload,
+  PPECameraStatusChangedPayload,
+  PPESiteAlertTriggeredPayload,
+} from "./kafka-event.type";
+
 export interface EventPayloadMap {
   "auth.user_registered": UserRegisteredPayload;
   "auth.verification_requested": VerificationRequestedPayload;
@@ -56,6 +72,10 @@ export interface EventPayloadMap {
   "auth.deactivation_requested": DeactivationRequestedPayload;
   "user.soft_deleted": UserSoftDeletedPayload;
   "file.uploaded_unconfirmed": FileUploadedUnconfirmedPayload;
+  "ppe.violation.detected": PPEViolationDetectedPayload;
+  "ppe.incident.resolved": PPEIncidentResolvedPayload;
+  "ppe.camera.status_changed": PPECameraStatusChangedPayload;
+  "ppe.site.alert_triggered": PPESiteAlertTriggeredPayload;
 }
 
 export interface EventEnvelope<T = unknown> {

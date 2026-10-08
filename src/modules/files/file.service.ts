@@ -115,7 +115,7 @@ export class FileService {
       .replace(/[^a-z0-9_-]/g, "-")
       .replace(/-+/g, "-")
       .replace(/^-|-$/g, "");
-    return `${basename || "file"}_${uuidv7().slice(0, 8)}${ext}`;
+    return `${basename || "file"}_${uuidv7().replace(/-/g, "").slice(0, 16)}${ext}`;
   }
 
   async requestUploadUrl(
@@ -549,7 +549,7 @@ export class FileService {
       .toLowerCase()
       .replace(/[^a-z0-9_-]/g, "-")
       .slice(0, 50);
-    const finalFileName = `${cleanBasename || "image"}_${uuidv7().slice(0, 8)}${ext}`;
+    const finalFileName = `${cleanBasename || "image"}_${uuidv7().replace(/-/g, "").slice(0, 16)}${ext}`;
     const bucketKey = `${folder}/${userId || "public"}/${finalFileName}`;
 
     // Upload buffer đã nén lên R2

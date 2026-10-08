@@ -721,3 +721,67 @@
   - **3. Cấu hình biến môi trường (`.env.example` & `.env`)**:
     - Khai báo Section 15 với 6 biến `*_DATABASE_URL`, các cổng infra, Kafka brokers và MinIO endpoints.
 
+- **PPE Microservices: Phase 2 - API Gateway Routing & Kafka Event Schemas (2026-10-08)**:
+  - **1. Chuẩn hóa Biến môi trường Database**:
+    - Loại bỏ khối `DATABASE_URL` dư thừa tại Section 2 của `.env`, thống nhất quản lý tại Section 15b (`IDENTITY_DATABASE_URL`).
+    - Cập nhật `src/config/env.config.ts` và `scripts/prisma-run.js` tự động fallback `DATABASE_URL` từ `IDENTITY_DATABASE_URL`.
+  - **2. API Gateway Traefik v3 (Routing & Security)**:
+    - Loại bỏ thuộc tính `sniStrict: true` lỗi thời trong `traefik/dynamic.yml` tương thích Traefik v3.
+    - Định tuyến động qua Gateway cổng 80: `/api/v1/*` (app-api :9999), `/.well-known/jwks.json` (Auth JWKS), `/api/v1/notifications/*` (notification-service :8889), `/api/v1/files/*` (media-service :8890).
+    - Tự động gắn các security headers chuẩn (nosniff, frameDeny, permissions-policy, x-request-id UUIDv7).
+  - **3. Khai báo Apache Kafka Event Schemas cho PPE Domain**:
+    - `src/common/constants/kafka.constant.ts`: Định nghĩa topics (`ppe.violation.detected`, `ppe.incident.resolved`, `ppe.camera.status_changed`, `ppe.site.alert_triggered`), consumer groups, violation types (`NO_HELMET`, `NO_VEST`, `NO_BOOTS`...), severity levels (`LOW`, `MEDIUM`, `HIGH`, `CRITICAL`), detection classes.
+    - `src/common/validations/kafka-event.schema.ts`: Toàn bộ Zod schemas kiểm thực chặt chẽ cho producers & consumers, chống poison pill messages, hỗ trợ hàm helper `validateKafkaEvent`.
+    - `src/common/types/kafka-event.type.ts`: TypeScript contracts & interfaces suy luận từ Zod schema phục vụ tái sử dụng đa service.
+    - `tests/kafka-event-schema.test.ts`: 5/5 automated tests kiểm thực schema Kafka PASS 100%.
+
+- **PPE Microservices: Việc 1 - Database-per-Service 6 CSDL Schemas, Migrations & Clients (2026-10-09)**:
+  - **1. Chuẩn hóa 6 Prisma Schemas độc lập theo thư mục riêng biệt (`prisma/<service>/`)**:
+    - `prisma/identity/schema.prisma` (`ppe_identity_db`): Toàn bộ bảng Users, RBAC, Sessions, AuditLog, Outbox. Di dời `migrations/` vào `prisma/identity/migrations/`. Output: `@prisma/client`.
+    - `prisma/site/schema.prisma` (`ppe_site_db`): `sites`, `zones`, `site_safety_configs`, `restricted_areas`. Client: `@prisma/client-site`.
+    - `prisma/camera/schema.prisma` (`ppe_camera_db`): `cameras`, `camera_streams`, `camera_configs`, `camera_health_logs`. Client: `@prisma/client-camera`.
+    - `prisma/incident/schema.prisma` (`ppe_incident_db`): `incidents`, `evidences`, `evidence_metadata`, `evidence_access_logs`, `incident_assignments`, `incident_status_history`, `incident_comments`. Client: `@prisma/client-incident`.
+    - `prisma/notification/schema.prisma` (`ppe_notification_db`): `notifications`, `notification_templates`, `notification_preferences`, `notification_logs`. Client: `@prisma/client-notification`.
+    - `prisma/reporting/schema.prisma` (`ppe_reporting_db`): `report_templates`, `report_generations`, `report_statistics`, `incident_statistics`, `ai_performance_statistics`, `ai_models`, `ai_model_versions`. Client: `@prisma/client-reporting`.
+  - **2. Đồng bộ Khóa chính UUIDv7 & Database Functions**:
+    - Toàn bộ 27 bảng mới sử dụng `@id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid`.
+    - `scripts/init-multiple-dbs.sql` được cập nhật nạp extension `pgcrypto` và quyền `CREATEDB` cho 6 user.
+    - Cả 6 CSDL trên Docker PostgreSQL 16 (Port 5433) đều đã nạp hàm `uuid_generate_v7()` và áp dụng migrations hoàn tất.
+  - **3. Tooling & npm Scripts Điều phối**:
+    - `scripts/prisma-service.js`: CLI runner hỗ trợ chạy `generate`, `migrate dev`, `validate` cho 6 service độc lập (`identity`, `site`, `camera`, `incident`, `notification`, `reporting`).
+    - `package.json`: Bổ sung `prisma:generate:<service>`, `prisma:generate:all`, `db:migrate:<service>`, `db:migrate:all`.
+  - **4. Singleton Database Clients**:
+    - `src/database/identity.client.ts` (`identityPrisma`), `src/database/site.client.ts` (`sitePrisma`), `src/database/camera.client.ts` (`cameraPrisma`), `src/database/incident.client.ts` (`incidentPrisma`), `src/database/notification.client.ts` (`notificationPrisma`), `src/database/reporting.client.ts` (`reportingPrisma`).
+  - **5. Automated Verification**:
+    - `tests/microservices-database-schema.test.ts`: 9/9 tests pass (tạo dữ liệu thực tế mẫu trên cả 6 CSDL, kiểm tra sinh UUIDv7, kiểm tra cô lập ranh giới kiến trúc).
+    - Toàn bộ test suite dự án `pnpm test`: 594/594 test cases pass 100%.
+    - `pnpm build` (tsc 0 lỗi), `pnpm run lint` (ESLint 0 lỗi/0 cảnh báo).
+
+- **PPE Microservices: Việc 2 & 3 - Traefik Dynamic Routing, Gateway Execution & Routing Verification (2026-10-09)**:
+  - **1. Cập nhật Dynamic Routing trên Traefik (`traefik/dynamic.yml`)**:
+    - Khai báo 7 HTTP Routers và 7 HTTP Services với priority rõ ràng:
+      - `sites` (priority 100): `PathPrefix('/api/v1/sites') || PathPrefix('/api/v1/zones') || PathPrefix('/api/v1/restricted-areas')` -> `http://host.docker.internal:8891`
+      - `cameras` (priority 100): `PathPrefix('/api/v1/cameras') || PathPrefix('/api/v1/camera-streams')` -> `http://host.docker.internal:8892`
+      - `incidents` (priority 100): `PathPrefix('/api/v1/incidents') || PathPrefix('/api/v1/evidences')` -> `http://host.docker.internal:8893`
+      - `notifications` (priority 100): `PathPrefix('/api/v1/notifications')` -> `http://host.docker.internal:8889`
+      - `reporting` (priority 100): `PathPrefix('/api/v1/reports') || PathPrefix('/api/v1/statistics') || PathPrefix('/api/v1/ai-models')` -> `http://host.docker.internal:8894`
+      - `media` (priority 100): `PathPrefix('/api/v1/files')` -> `http://host.docker.internal:8890`
+      - `app-api` (priority 1, catch-all): `PathPrefix('/api/v1') || PathPrefix('/.well-known') || PathPrefix('/api/docs')` -> `http://host.docker.internal:9999`
+    - Cấu hình chuỗi Middlewares bảo mật trên mọi Router: `security-headers`, `global-ratelimit`, `request-id`, `inject-gateway-secret`.
+  - **2. Đồng bộ Request Correlation & Gateway Secret**:
+    - Đã tạo `scripts/sync-traefik-config.js`: Tự động nạp `GATEWAY_INTERNAL_SECRET` an toàn vào Traefik config mà không lộ thông tin bí mật ra git diff.
+    - Sửa lỗi stripping `X-Request-Id`: Đảm bảo Traefik chuyển tiếp nguyên vẹn correlation `X-Request-Id` của client gửi lên; backend tự động sinh UUIDv7 khi client không gửi.
+    - Thêm `extra_hosts: ["host.docker.internal:host-gateway"]` vào `docker-compose.yml` và `docker-compose.dev.yml` để đảm bảo Traefik trong Docker phân giải chuẩn 100% về host.
+    - Tạo cặp khóa RSA cố định tại `keys/private.key.pem` và `keys/public.key.pem` (được bảo vệ trong `.gitignore`) để toàn bộ các microservices (`app-api`, `notification-service`, `media-service`) cùng chia sẻ và thẩm định Access Token (Auth Propagation).
+  - **3. Khởi chạy Hệ thống & Kiểm thử Thực tế**:
+    - Traefik API Gateway (`app_gateway`) khởi chạy trên các cổng `80` (HTTP), `443` (HTTPS), và `8080` (Dashboard).
+    - Các microservice processes: `app-api` (:9999), `notification-service` (:8889), `media-service` (:8890) cùng PostgreSQL (:5433), Kafka (:9092) và Redis (:6379/6381) hoạt động ổn định.
+    - `tests/gateway-routing.test.ts`: Bộ test tự động 13/13 test cases PASS 100%:
+      - Đăng ký đầy đủ 7 routers & 7 services trên Traefik dashboard.
+      - Distributed Tracing: Khớp `X-Request-Id` client và tự sinh UUIDv7 khi không có header.
+      - Security headers: nosniff, frameDeny, permissions-policy, referrer-policy.
+      - Auth Propagation: Đăng nhập nhận token và forward thành công qua Gateway tới các services.
+      - Domain Routing: Xác nhận định tuyến chuẩn xác tới các microservices (`sites`, `cameras`, `incidents`, `reports` trúng priority 100 và trả về 502 khi offline thay vì 404 từ app-api).
+    - `tests/integration-live-server.test.ts`: Toàn bộ 24/24 integration tests chạy qua Gateway (`http://localhost`) PASS 100%.
+    - `pnpm test`, `pnpm build`, `pnpm run lint`: Tất cả đều vượt qua với 0 lỗi.
+

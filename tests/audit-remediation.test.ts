@@ -620,10 +620,10 @@ describe("Audit & Remediation Verification Test Suite", () => {
     it("should verify RefreshToken, VerificationToken, and PasswordResetToken have expiresAt indexes in schema.prisma", () => {
       const fs = require("node:fs");
       const path = require("node:path");
-      const schema = fs.readFileSync(
-        path.join(__dirname, "../prisma/schema.prisma"),
-        "utf-8",
-      );
+      const schemaPath = fs.existsSync(path.join(__dirname, "../prisma/identity/schema.prisma"))
+        ? path.join(__dirname, "../prisma/identity/schema.prisma")
+        : path.join(__dirname, "../prisma/schema.prisma");
+      const schema = fs.readFileSync(schemaPath, "utf-8");
 
       const getModelBlock = (modelName: string) => {
         const match = schema.match(

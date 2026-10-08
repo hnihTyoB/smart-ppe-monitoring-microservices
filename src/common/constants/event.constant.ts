@@ -13,6 +13,12 @@ export const EVENT_NAMES = {
   AUTH_DEACTIVATION_REQUESTED: "auth.deactivation_requested",
   USER_SOFT_DELETED: "user.soft_deleted",
   FILE_UPLOADED_UNCONFIRMED: "file.uploaded_unconfirmed",
+
+  // PPE Domain Kafka Events
+  PPE_VIOLATION_DETECTED: "ppe.violation.detected",
+  PPE_INCIDENT_RESOLVED: "ppe.incident.resolved",
+  PPE_CAMERA_STATUS_CHANGED: "ppe.camera.status_changed",
+  PPE_SITE_ALERT_TRIGGERED: "ppe.site.alert_triggered",
 } as const;
 
 export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES];

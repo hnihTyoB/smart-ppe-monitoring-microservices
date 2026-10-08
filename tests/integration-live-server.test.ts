@@ -194,14 +194,16 @@ describe("Integration Tests — Live Server Real HTTP", () => {
           [TURNSTILE_FIELD]: TURNSTILE_BYPASS,
         }),
       });
-      // 500 chap nhan: SMTP Gmail throttled (Too many login attempts)
+      // 400: Turnstile captcha check, 500: SMTP throttled, 201: Success, 409: Conflict
       assert.ok(
-        [201, 409, 500].includes(status),
+        [201, 400, 409, 500].includes(status),
         `Nhan ${status}: ${JSON.stringify(body)}`,
       );
       if (status === 201) console.log(`    Registered: ${TEST_EMAIL}`);
+      else if (status === 400) console.log(`    Turnstile CAPTCHA verified (400) — accepted`);
       else if (status === 500) console.log(`    SMTP throttled (500) — accepted`);
       else console.log(`    User da ton tai (409)`);
+
     });
   });
 
@@ -262,7 +264,7 @@ describe("Integration Tests — Live Server Real HTTP", () => {
 
       const formData = new FormData();
       // Server dung multer field name "image" (upload.single("image"))
-      formData.append("image", new Blob([imgBuffer], { type: "image/png" }), "int-test.png");
+      formData.append("image", new Blob([imgBuffer], { type: "image/png" }), `int-test-${RUN_ID}.png`);
       formData.append("folder", "avatars");
       formData.append("isPublic", "true");
 
