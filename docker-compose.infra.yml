@@ -1,0 +1,180 @@
+# =============================================================================
+# PPE MICROSERVICES: INFRASTRUCTURE SERVICES
+# =============================================================================
+# File này quản lý hạ tầng dùng chung cho kiến trúc Database-per-Service:
+#   • PostgreSQL 16 (chứa 6 logical databases độc lập)
+#   • Apache Kafka KRaft (Event Bus cho Violation Events, không cần Zookeeper)
+#   • Kafka UI (quản lý trực quan topics & messages)
+#   • MinIO (Object Storage cho evidence snapshots/clips)
+#
+# CÁCH SỬ DỤNG:
+#   Khởi động hạ tầng:
+#     docker compose -f docker-compose.infra.yml up -d
+#
+#   Xem logs:
+#     docker compose -f docker-compose.infra.yml logs -f
+#
+#   Dừng và xóa:
+#     docker compose -f docker-compose.infra.yml down
+#
+#   Dừng và xóa kể cả volumes (XÓA TOÀN BỘ DATA):
+#     docker compose -f docker-compose.infra.yml down -v
+#
+# KẾT HỢP VỚI APP SERVICES (docker-compose.yml):
+#   docker compose -f docker-compose.infra.yml -f docker-compose.yml up -d
+#
+# =============================================================================
+
+services:
+  # ── PostgreSQL: 1 Instance chứa 6 Logical Databases ────────────────────────
+  # Mỗi microservice sở hữu 1 database riêng biệt với user/password riêng.
+  # Script init-multiple-dbs.sql tự động tạo databases + users + REVOKE/GRANT
+  # khi container khởi tạo volume lần đầu tiên.
+  # ────────────────────────────────────────────────────────────────────────────
+  ppe-postgres:
+    image: postgres:16-alpine
+    container_name: ppe_postgres
+    restart: unless-stopped
+    environment:
+      # Superuser account (chỉ dùng cho quản trị, KHÔNG dùng trong application code)
+      POSTGRES_USER: ${PPE_POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${PPE_POSTGRES_PASSWORD:-postgres_master_dev}
+      # Timezone chuẩn cho nghiệp vụ (Asia/Ho_Chi_Minh / UTC+7)
+      TZ: "Asia/Ho_Chi_Minh"
+    ports:
+      - "${PPE_POSTGRES_PORT:-5433}:5432"
+    volumes:
+      # Persistent data volume
+      - ppe_pgdata:/var/lib/postgresql/data
+      # Mount init script — chỉ chạy khi volume mới (lần đầu khởi tạo)
+      - ./scripts/init-multiple-dbs.sql:/docker-entrypoint-initdb.d/01-init-multiple-dbs.sql:ro
+    networks:
+      - ppe_infra_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PPE_POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ── Apache Kafka: Event Bus (KRaft Mode — Zero Zookeeper) ──────────────────
+  # Chạy ở chế độ KRaft combined (broker + controller trong 1 node).
+  # Phù hợp cho development và đồ án; production sẽ tách broker/controller.
+  #
+  # Ports:
+  #   9092  — Client connections từ host machine (localhost)
+  #   29092 — Internal Docker network connections (giữa containers)
+  # ────────────────────────────────────────────────────────────────────────────
+  ppe-kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: ppe_kafka
+    restart: unless-stopped
+    ports:
+      - "${PPE_KAFKA_PORT:-9092}:9092"
+    environment:
+      # KRaft mode configuration (không dùng Zookeeper)
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@ppe-kafka:29093"
+      # CLUSTER_ID phải là chuỗi base64-encoded 16-byte UUID đúng chuẩn 22 ký tự
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
+
+      # Listener configuration
+      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:29092,CONTROLLER://0.0.0.0:29093,PLAINTEXT_HOST://0.0.0.0:9092"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://ppe-kafka:29092,PLAINTEXT_HOST://localhost:${PPE_KAFKA_PORT:-9092}"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+
+      # Topic defaults (đủ cho development 1 node)
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+
+      # Log storage theo chuẩn cp-kafka image
+      KAFKA_LOG_DIRS: "/var/lib/kafka/data"
+
+      # Auto-create topic khi producer gửi lần đầu (development convenience)
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    volumes:
+      - ppe_kafka_data:/var/lib/kafka/data
+    networks:
+      - ppe_infra_net
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  # ── Kafka UI: Quản lý trực quan Topics, Messages & Consumer Groups ─────────
+  # Truy cập tại: http://localhost:8088
+  # Dùng để inspect topic ppe.violation.detected, xem messages, consumer lag.
+  # ────────────────────────────────────────────────────────────────────────────
+  ppe-kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: ppe_kafka_ui
+    restart: unless-stopped
+    ports:
+      - "${PPE_KAFKA_UI_PORT:-8088}:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: "ppe-local-cluster"
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: "ppe-kafka:29092"
+      DYNAMIC_CONFIG_ENABLED: "true"
+    depends_on:
+      ppe-kafka:
+        condition: service_healthy
+    networks:
+      - ppe_infra_net
+
+  # ── MinIO: Object Storage cho Evidence Snapshots & Video Clips ─────────────
+  # S3-compatible API cho AI Vision upload ảnh chụp vi phạm và video clip.
+  #
+  # Endpoints:
+  #   9000 — S3 API (dùng trong code: AWS SDK S3 client)
+  #   9001 — Web Console (quản lý buckets, objects trực quan)
+  #
+  # Console: http://localhost:9001
+  # Đăng nhập mặc định: minio_admin / minio_admin_secret
+  # ────────────────────────────────────────────────────────────────────────────
+  ppe-minio:
+    image: minio/minio:RELEASE.2024-01-18T22-51-28Z
+    container_name: ppe_minio
+    restart: unless-stopped
+    # Profile minio: Chỉ kích hoạt khi chạy offline với: docker compose --profile minio up -d
+    # Khi đã cấu hình Cloudflare R2 (Mục 8 trong .env), không cần khởi chạy container này.
+    profiles:
+      - minio
+    ports:
+      - "${PPE_MINIO_API_PORT:-9000}:9000"
+      - "${PPE_MINIO_CONSOLE_PORT:-9001}:9001"
+    environment:
+      MINIO_ROOT_USER: ${PPE_MINIO_ROOT_USER:-minio_admin}
+      MINIO_ROOT_PASSWORD: ${PPE_MINIO_ROOT_PASSWORD:-minio_admin_secret}
+    command: server /data --console-address ":9001"
+    volumes:
+      - ppe_minio_data:/data
+    networks:
+      - ppe_infra_net
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+# ── Networks ──────────────────────────────────────────────────────────────────
+networks:
+  ppe_infra_net:
+    name: ppe_infra_net
+    driver: bridge
+
+# ── Volumes (Persistent Data) ────────────────────────────────────────────────
+volumes:
+  ppe_pgdata:
+    driver: local
+  ppe_kafka_data:
+    driver: local
+  ppe_minio_data:
+    driver: local

@@ -44,7 +44,10 @@ import {
   AUDIT_ACTION,
   AUDIT_TARGET_TYPE,
 } from "../../common/constants/audit-log.constant";
-import { AUTH_PROVIDER } from "../../common/constants/auth.constant";
+import {
+  AUTH_PROVIDER,
+  GOOGLE_OAUTH_DEFAULT_DEV_REDIRECT_URI,
+} from "../../common/constants/auth.constant";
 import {
   NOTIFICATION_TYPE,
   NOTIFICATION_PRIORITY,
@@ -565,7 +568,7 @@ export class AuthService {
       query.redirectUri ||
       (allowedUris.length > 0
         ? allowedUris[0]
-        : "http://localhost:7777/api/v1/auth/google/callback");
+        : GOOGLE_OAUTH_DEFAULT_DEV_REDIRECT_URI);
 
     // Kiểm tra allowlist trước khi sinh URL — ngăn Open Redirect
     validateGoogleRedirectUri(redirectUri);

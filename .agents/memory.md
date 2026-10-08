@@ -698,3 +698,26 @@
   - Đã seed thành công vào PostgreSQL: 34 quyền cho vai trò `ADMIN`, 17 quyền cho `MANAGER`, 4 quyền cơ bản cho `USER`.
   - Bộ kiểm thử tích hợp thực tế `tests/integration-live-server.test.ts` (gọi HTTP thật qua dev server ở cổng 9999 kết nối Supabase Postgres, Redis và Cloudflare R2): **24/24 tests PASS (100%)**.
   - Xác nhận chức năng upload ảnh thật (tự động tối ưu WebP, lưu bucket Cloudflare R2, lưu metadata DB) và sinh Presigned URL hoạt động trơn tru.
+
+- **PPE Microservices: Bước 1 - Database-per-Service Infrastructure & Event Bus (2026-10-08)**:
+  - **Mục tiêu**: Xây dựng hạ tầng Database-per-Service cho đồ án Hệ thống giám sát an toàn công trường thông minh (Smart PPE Monitoring), chuyển đổi từ mô hình monolith sang kiến trúc 6 logical databases và Apache Kafka Event Bus theo yêu cầu giảng viên (Phase 0).
+  - **1. Script khởi tạo 6 Logical Databases (`scripts/init-multiple-dbs.sql`)**:
+    - Tự động tạo 6 database và 6 user riêng biệt:
+      - `ppe_identity_db` (`ppe_identity_user`) cho Identity/Auth/RBAC Service
+      - `ppe_site_db` (`ppe_site_user`) cho Site & Area Management Service
+      - `ppe_camera_db` (`ppe_camera_user`) cho Camera Service
+      - `ppe_incident_db` (`ppe_incident_user`) cho Incident & Violation Service
+      - `ppe_notification_db` (`ppe_notification_user`) cho Notification Service
+      - `ppe_reporting_db` (`ppe_reporting_user`) cho Reporting & Statistics Service
+    - Áp dụng cô lập quyền truy cập (`REVOKE CONNECT ON DATABASE ... FROM PUBLIC`), chỉ cấp quyền `GRANT CONNECT` cho user sở hữu tương ứng, ngăn chặn cross-database access.
+    - Kích hoạt extension `uuid-ossp` trên từng database phục vụ sinh UUIDv7/UUID.
+  - **2. Docker Compose Hạ tầng độc lập (`docker-compose.infra.yml`)**:
+    - Tách biệt hoàn toàn với `docker-compose.yml` hiện có của template.
+    - `ppe-postgres`: PostgreSQL 16 Alpine, port `5433:5432` (tránh xung đột port 5432 local), mount `init-multiple-dbs.sql`, volume `ppe_pgdata`, healthcheck `pg_isready`.
+    - `ppe-kafka`: Apache Kafka 7.5.0 KRaft mode (zero Zookeeper), port `9092:9092` (host) và `29092` (internal cluster), healthcheck `kafka-broker-api-versions`.
+    - `ppe-kafka-ui`: Provectus Kafka UI tại port `8088:8080`, kết nối Kafka cluster phục vụ quan sát topic vi phạm `ppe.violation.detected`.
+    - `ppe-minio`: MinIO Object Storage tại port `9000` (S3 API) và `9001` (Web Console) cho evidence snapshots/clips.
+    - Mạng riêng `ppe_infra_net` và persistent volumes độc lập (`ppe_pgdata`, `ppe_kafka_data`, `ppe_minio_data`).
+  - **3. Cấu hình biến môi trường (`.env.example` & `.env`)**:
+    - Khai báo Section 15 với 6 biến `*_DATABASE_URL`, các cổng infra, Kafka brokers và MinIO endpoints.
+
