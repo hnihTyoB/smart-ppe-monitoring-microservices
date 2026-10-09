@@ -1,11 +1,19 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../../database/prisma.client";
-import { ROLES } from "../../common/constants/role.constant";
-import { PERMISSIONS } from "../../common/constants/permission.constant";
 import { EMAIL_STATUS } from "../../common/constants/notification.constant";
 import { ActivitySummaryStatsDto } from "./cron.dto";
+import {
+  userRepository,
+  UserRepository,
+} from "../users/user.repository";
 
 export class CronRepository {
+  private readonly userRepo: UserRepository;
+
+  constructor(userRepo?: UserRepository) {
+    this.userRepo = userRepo || userRepository;
+  }
+
   /**
    * Xóa toàn bộ các bản ghi Audit Logs tạo trước thời điểm cutoffDate
    */
@@ -49,18 +57,7 @@ export class CronRepository {
    * Lấy toàn bộ danh sách avatarUrl hiện tại của các User đang lưu trong DB
    */
   async getAllUserAvatarUrls(): Promise<string[]> {
-    const users = await prisma.user.findMany({
-      where: {
-        avatarUrl: { not: null },
-      },
-      select: {
-        avatarUrl: true,
-      },
-    });
-
-    return users
-      .map((u) => u.avatarUrl)
-      .filter((url): url is string => Boolean(url));
+    return this.userRepo.getAllUserAvatarUrls();
   }
 
   /**
@@ -127,45 +124,7 @@ export class CronRepository {
   async findAdminUsers(): Promise<
     Array<{ id: string; email: string; fullName: string | null }>
   > {
-    const admins = await prisma.user.findMany({
-      where: {
-        isActive: true,
-        deletedAt: null,
-        email: { not: null },
-        OR: [
-          { role: { name: ROLES.ADMIN } },
-          {
-            role: {
-              permissions: {
-                some: {
-                  permission: {
-                    name: {
-                      in: [
-                        PERMISSIONS.USER_ROLE_ASSIGN,
-                        PERMISSIONS.ROLE_PERMISSION_ASSIGN,
-                        PERMISSIONS.AUDIT_LOG_READ,
-                        PERMISSIONS.CRON_JOB_READ,
-                      ],
-                    },
-                  },
-                },
-              },
-            },
-          },
-        ],
-      },
-      select: {
-        id: true,
-        email: true,
-        fullName: true,
-      },
-    });
-
-    return admins as Array<{
-      id: string;
-      email: string;
-      fullName: string | null;
-    }>;
+    return this.userRepo.findAdminUsers();
   }
 
   /**

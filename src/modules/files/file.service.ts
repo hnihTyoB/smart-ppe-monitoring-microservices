@@ -9,6 +9,7 @@ import { PERMISSIONS } from "../../common/constants/permission.constant";
 import {
   AUDIT_ACTION,
   AUDIT_TARGET_TYPE,
+  SYSTEM_TARGET_ID,
 } from "../../common/constants/audit-log.constant";
 import {
   STORAGE_CONFIG_KEYS,
@@ -821,7 +822,7 @@ export class FileService {
       actorId: actorContext?.actorId,
       action: AUDIT_ACTION.CLEANUP_ORPHAN_FILES,
       targetType: AUDIT_TARGET_TYPE.SYSTEM_CONFIG,
-      targetId: "SYSTEM",
+      targetId: SYSTEM_TARGET_ID,
       details: {
         unconfirmedCleaned,
         softDeletedCleaned,

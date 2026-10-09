@@ -9,9 +9,22 @@ export const DEFAULT_INCIDENT_TRANSACTION_OPTIONS = {
   timeout: 15000,
 } as const;
 
-export const incidentPrisma = new IncidentPrismaClient({
-  log:
-    envConfig.nodeEnv === "development"
-      ? ["query", "error", "warn"]
-      : ["error", "warn"],
+let _incidentPrisma: IncidentPrismaClient | null = null;
+
+export function getIncidentPrisma(): IncidentPrismaClient {
+  if (!_incidentPrisma) {
+    _incidentPrisma = new IncidentPrismaClient({
+      log:
+        envConfig.nodeEnv === "development"
+          ? ["query", "error", "warn"]
+          : ["error", "warn"],
+    });
+  }
+  return _incidentPrisma;
+}
+
+export const incidentPrisma = new Proxy({} as IncidentPrismaClient, {
+  get(_target, prop) {
+    return (getIncidentPrisma() as any)[prop];
+  },
 });

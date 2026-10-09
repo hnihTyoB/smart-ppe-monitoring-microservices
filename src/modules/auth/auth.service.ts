@@ -202,14 +202,6 @@ export class AuthService {
       );
     }
 
-    if (!user.isActive) {
-      throw new AppError(
-        "Tài khoản chưa được kích hoạt hoặc đã bị vô hiệu hóa. Vui lòng xác thực email hoặc liên hệ quản trị viên.",
-        403,
-        ERROR_CODE.USER_INACTIVE,
-      );
-    }
-
     // 0. Kiểm tra tài khoản có đang bị tạm khóa (Account Lockout) do sai mật khẩu quá nhiều lần
     this.assertAccountNotLocked(user.lockedUntil);
 
@@ -225,6 +217,15 @@ export class AuthService {
 
     if (!isPasswordValid) {
       await this.handleFailedLoginAttempt(user, metadata);
+    }
+
+    // SEC-05: Chặn User Enumeration: Chỉ kiểm tra trạng thái kích hoạt sau khi đã xác thực mật khẩu chính xác
+    if (!user.isActive) {
+      throw new AppError(
+        "Tài khoản chưa được kích hoạt hoặc đã bị vô hiệu hóa. Vui lòng xác thực email hoặc liên hệ quản trị viên.",
+        403,
+        ERROR_CODE.USER_INACTIVE,
+      );
     }
 
     // Đăng nhập thành công -> Reset số lần đăng nhập sai và thời gian khóa nếu có
@@ -788,26 +789,8 @@ export class AuthService {
       );
     }
 
-    const savedToken = await this.repository.findRefreshToken(token);
-    if (!savedToken) {
-      throw new AppError(
-        "Invalid or expired refresh token",
-        401,
-        ERROR_CODE.TOKEN_INVALID,
-      );
-    }
-
-    if (savedToken.expiresAt < new Date()) {
-      await this.repository.deleteRefreshToken(token);
-      throw new AppError(
-        "Refresh token expired",
-        401,
-        ERROR_CODE.TOKEN_EXPIRED,
-      );
-    }
-
     const user = await this.repository.findById(payload.id);
-    if (!user || !user.isActive) {
+    if (!user || !user.isActive || user.deletedAt) {
       throw new AppError(
         "User not found or inactive",
         401,
@@ -845,6 +828,13 @@ export class AuthService {
     );
 
     if (rotationResult && !rotationResult.rotated) {
+      if ((rotationResult as any).reason === "EXPIRED") {
+        throw new AppError(
+          "Refresh token expired",
+          401,
+          ERROR_CODE.TOKEN_EXPIRED,
+        );
+      }
       throw new AppError(
         "Refresh token không hợp lệ hoặc đã được sử dụng. Toàn bộ phiên đăng nhập đã được thu hồi vì lý do bảo mật.",
         401,

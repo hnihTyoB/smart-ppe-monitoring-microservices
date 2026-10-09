@@ -781,25 +781,36 @@ describe("Audit & Remediation Verification Test Suite", () => {
     it("should verify findAdminUsers in cron repository queries dynamic administrative permissions without hardcoded strings", () => {
       const fs = require("node:fs");
       const path = require("node:path");
-      const repoPath = path.join(
+      const cronRepoPath = path.join(
         __dirname,
         "../src/modules/cron/cron.repository.ts",
       );
-      const content = fs.readFileSync(repoPath, "utf-8");
+      const userRepoPath = path.join(
+        __dirname,
+        "../src/modules/users/user.repository.ts",
+      );
+      const cronContent = fs.readFileSync(cronRepoPath, "utf-8");
+      const userContent = fs.readFileSync(userRepoPath, "utf-8");
 
       assert.equal(
-        content.includes('["ADMIN", "SUPER_ADMIN", "SYSTEM_ADMIN"]'),
+        cronContent.includes('["ADMIN", "SUPER_ADMIN", "SYSTEM_ADMIN"]') ||
+          userContent.includes('["ADMIN", "SUPER_ADMIN", "SYSTEM_ADMIN"]'),
         false,
-        "cron.repository.ts should not use hardcoded magic string array for roles",
+        "Should not use hardcoded magic string array for roles",
       );
       assert.ok(
-        content.includes("ROLES.ADMIN"),
-        "cron.repository.ts should use ROLES.ADMIN constant",
+        cronContent.includes("this.userRepo.findAdminUsers()") ||
+          cronContent.includes("ROLES.ADMIN"),
+        "cron.repository.ts should delegate to UserRepository or use ROLES.ADMIN",
       );
       assert.ok(
-        content.includes("PERMISSIONS.CRON_JOB_READ") ||
-          content.includes("PERMISSIONS.USER_ROLE_ASSIGN"),
-        "cron.repository.ts should check admin permissions dynamically",
+        userContent.includes("ROLES.ADMIN"),
+        "user.repository.ts should use ROLES.ADMIN constant",
+      );
+      assert.ok(
+        userContent.includes("PERMISSIONS.CRON_JOB_READ") ||
+          userContent.includes("PERMISSIONS.USER_ROLE_ASSIGN"),
+        "user.repository.ts should check admin permissions dynamically",
       );
     });
   });

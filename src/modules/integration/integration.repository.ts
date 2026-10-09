@@ -197,6 +197,7 @@ export class IntegrationRepository {
     const meta = formatPaginationMeta(safePage, safeLimit, total);
 
     return {
+      data: items,
       items,
       total,
       page: safePage,

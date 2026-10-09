@@ -1,3 +1,6 @@
+import jwt from "jsonwebtoken";
+import { jwtConfig } from "../../config/jwt.config";
+import { JWT_PURPOSE } from "../../common/constants/jwt.constant";
 import { AppError } from "../../common/errors/app-error";
 import { ERROR_CODE } from "../../common/errors/error-code";
 import {
@@ -51,6 +54,31 @@ export class NotificationService {
     this.repository = repository || new NotificationRepository();
     this.emailTemplateService =
       emailTemplateService || new EmailTemplateService();
+  }
+
+  createStreamTicket(user?: {
+    id?: string;
+    email?: string | null;
+    role?: string;
+    roleId?: string;
+  }): { ticket: string; expiresIn: number } {
+    if (!user || !user.id) {
+      throw new AppError("Unauthorized", 401, ERROR_CODE.UNAUTHORIZED);
+    }
+
+    const ticket = jwt.sign(
+      {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        roleId: user.roleId,
+        purpose: JWT_PURPOSE.SSE_STREAM_TICKET,
+      },
+      jwtConfig.tempSecret,
+      { expiresIn: "60s" },
+    );
+
+    return { ticket, expiresIn: 60 };
   }
 
   async list(
@@ -242,18 +270,13 @@ export class NotificationService {
   }
 
   async listEmails(dto: ListEmailsDto): Promise<ListEmailsResponseDto> {
-    const { page: safePage, limit: safeLimit } = calculatePaginationSkip(
-      dto.page,
-      dto.limit,
-    );
-    const [items, total] = await this.repository.findEmails(dto);
-    const meta = formatPaginationMeta(safePage, safeLimit, total);
+    const { data: items, meta } = await this.repository.findEmails(dto);
 
     return {
       items,
-      total,
-      page: safePage,
-      limit: safeLimit,
+      total: meta.total,
+      page: meta.page,
+      limit: meta.limit,
       totalPages: meta.totalPages,
       meta,
     };
@@ -283,12 +306,7 @@ export class NotificationService {
   async listTemplates(
     dto: ListNotificationTemplatesDto,
   ): Promise<ListNotificationTemplatesResponseDto> {
-    const { page: safePage, limit: safeLimit } = calculatePaginationSkip(
-      dto.page,
-      dto.limit,
-    );
-    const [items, total] = await this.repository.findTemplates(dto);
-    const meta = formatPaginationMeta(safePage, safeLimit, total);
+    const { data: items, meta } = await this.repository.findTemplates(dto);
 
     return {
       items: items.map((item) => ({
@@ -306,9 +324,9 @@ export class NotificationService {
         createdAt: item.createdAt,
         updatedAt: item.updatedAt,
       })),
-      total,
-      page: safePage,
-      limit: safeLimit,
+      total: meta.total,
+      page: meta.page,
+      limit: meta.limit,
       totalPages: meta.totalPages,
       meta,
     };

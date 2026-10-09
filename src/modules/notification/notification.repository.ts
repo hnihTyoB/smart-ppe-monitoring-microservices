@@ -210,12 +210,12 @@ export class NotificationRepository {
   async claimPendingEmails(batchSize = 20): Promise<ClaimedEmailRecord[]> {
     return prisma.$queryRaw<ClaimedEmailRecord[]>`
       UPDATE email_notifications
-      SET status = 'PROCESSING', updated_at = NOW()
+      SET status = ${EMAIL_STATUS.PROCESSING}, updated_at = NOW()
       WHERE id IN (
         SELECT id FROM email_notifications
         WHERE (
-          status = 'PENDING'
-          OR (status = 'PROCESSING' AND updated_at < NOW() - INTERVAL '15 minutes')
+          status = ${EMAIL_STATUS.PENDING}
+          OR (status = ${EMAIL_STATUS.PROCESSING} AND updated_at < NOW() - INTERVAL '15 minutes')
         )
         AND attempts < ${EMAIL_MAX_ATTEMPTS}
         ORDER BY created_at ASC
@@ -255,7 +255,8 @@ export class NotificationRepository {
 
   async findEmails(dto: ListEmailsDto) {
     const { status, toEmail } = dto;
-    const { skip, take } = calculatePaginationSkip(dto.page, dto.limit);
+    const { skip, take, page: safePage, limit: safeLimit } =
+      calculatePaginationSkip(dto.page, dto.limit);
 
     const where = {
       ...(status && { status }),
@@ -264,7 +265,7 @@ export class NotificationRepository {
       }),
     };
 
-    return prisma.$transaction([
+    const [items, total] = await prisma.$transaction([
       prisma.emailNotification.findMany({
         where,
         orderBy: { createdAt: "desc" },
@@ -273,6 +274,11 @@ export class NotificationRepository {
       }),
       prisma.emailNotification.count({ where }),
     ]);
+
+    return {
+      data: items,
+      meta: formatPaginationMeta(safePage, safeLimit, total),
+    };
   }
 
   findEmailById(id: string) {
@@ -296,7 +302,8 @@ export class NotificationRepository {
 
   async findTemplates(dto: ListNotificationTemplatesDto) {
     const { isActive, search, channel } = dto;
-    const { skip, take } = calculatePaginationSkip(dto.page, dto.limit);
+    const { skip, take, page: safePage, limit: safeLimit } =
+      calculatePaginationSkip(dto.page, dto.limit);
 
     const where: Prisma.NotificationTemplateWhereInput = {
       ...(isActive !== undefined && { isActive }),
@@ -310,7 +317,7 @@ export class NotificationRepository {
       }),
     };
 
-    return prisma.$transaction([
+    const [data, total] = await prisma.$transaction([
       prisma.notificationTemplate.findMany({
         where,
         orderBy: [{ isSystem: "desc" }, { createdAt: "desc" }],
@@ -319,6 +326,11 @@ export class NotificationRepository {
       }),
       prisma.notificationTemplate.count({ where }),
     ]);
+
+    return {
+      data,
+      meta: formatPaginationMeta(safePage, safeLimit, total),
+    };
   }
 
   findTemplateByCode(code: string) {

@@ -198,6 +198,9 @@ export class EventBusService {
         await this.outboxRepo.markPublished(outboxRecord.id).catch(() => {});
         return envelope;
       } catch (err: any) {
+        if (options?.tx) {
+          throw err;
+        }
         console.warn(
           "[EventBus] Failed to write outbox record, fallback direct dispatch:",
           err?.message,

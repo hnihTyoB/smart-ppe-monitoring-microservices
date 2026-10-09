@@ -1,6 +1,4 @@
 import { Request, Response, NextFunction } from "express";
-import jwt from "jsonwebtoken";
-import { jwtConfig } from "../../config/jwt.config";
 import { NotificationService } from "./notification.service";
 import { sseManagerService } from "../../common/services/sse-manager.service";
 import {
@@ -18,29 +16,29 @@ import {
 export class NotificationController {
   private readonly service = new NotificationService();
 
-  createStreamTicket = (req: Request, res: Response): void => {
-    // SEC (F-01): Tạo short-lived ticket (60s) dùng riêng cho kết nối SSE stream qua query parameter
-    // Ngăn chặn access token bị rò rỉ và ghi vĩnh viễn vào server access logs / proxy logs.
-    const ticket = jwt.sign(
-      {
-        id: req.user.id,
-        email: req.user.email,
-        role: req.user.role,
-        roleId: req.user.roleId,
-        purpose: "SSE_STREAM_TICKET",
-      },
-      jwtConfig.tempSecret,
-      { expiresIn: "60s" },
-    );
-    res.json({
-      success: true,
-      data: { ticket, expiresIn: 60 },
-      message: "Stream ticket generated successfully",
-    });
+  createStreamTicket = (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): void => {
+    try {
+      const data = this.service.createStreamTicket(req.user);
+      res.json({
+        success: true,
+        data,
+        message: "Stream ticket generated successfully",
+      });
+    } catch (error) {
+      next(error);
+    }
   };
 
-  stream = (req: Request, res: Response): void => {
-    sseManagerService.registerClient(req.user.id, res, req);
+  stream = (req: Request, res: Response, next: NextFunction): void => {
+    try {
+      sseManagerService.registerClient(req.user.id, res, req);
+    } catch (error) {
+      next(error);
+    }
   };
 
   list = async (req: Request, res: Response, next: NextFunction) => {

@@ -293,16 +293,7 @@ export class FileRepository {
     };
   }
 
-  async delete(id: string, userId?: string) {
-    if (userId) {
-      const file = await prisma.fileRecord.findFirst({
-        where: { id, userId, deletedAt: null },
-        select: { id: true },
-      });
-      if (!file) {
-        throw new Error("File not found or ownership mismatch");
-      }
-    }
+  async delete(id: string) {
     return prisma.fileRecord.update({
       where: { id },
       data: {

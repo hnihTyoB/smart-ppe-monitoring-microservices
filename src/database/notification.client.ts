@@ -9,9 +9,22 @@ export const DEFAULT_NOTIFICATION_TRANSACTION_OPTIONS = {
   timeout: 15000,
 } as const;
 
-export const notificationPrisma = new NotificationPrismaClient({
-  log:
-    envConfig.nodeEnv === "development"
-      ? ["query", "error", "warn"]
-      : ["error", "warn"],
+let _notificationPrisma: NotificationPrismaClient | null = null;
+
+export function getNotificationPrisma(): NotificationPrismaClient {
+  if (!_notificationPrisma) {
+    _notificationPrisma = new NotificationPrismaClient({
+      log:
+        envConfig.nodeEnv === "development"
+          ? ["query", "error", "warn"]
+          : ["error", "warn"],
+    });
+  }
+  return _notificationPrisma;
+}
+
+export const notificationPrisma = new Proxy({} as NotificationPrismaClient, {
+  get(_target, prop) {
+    return (getNotificationPrisma() as any)[prop];
+  },
 });

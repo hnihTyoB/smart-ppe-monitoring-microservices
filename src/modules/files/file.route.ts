@@ -1,5 +1,4 @@
 import { Router } from "express";
-import multer from "multer";
 import { FileController } from "./file.controller";
 import {
   authMiddleware,
@@ -10,13 +9,8 @@ import {
   requireAnyPermission,
 } from "../../middlewares/permission.middleware";
 import { validate } from "../../middlewares/validate.middleware";
+import { uploadImageMiddleware } from "../../middlewares/upload.middleware";
 import { PERMISSIONS } from "../../common/constants/permission.constant";
-import {
-  MEDIA_LIMITS,
-  SUPPORTED_IMAGE_MIME_TYPES,
-} from "../../common/constants/media.constant";
-import { AppError } from "../../common/errors/app-error";
-import { ERROR_CODE } from "../../common/errors/error-code";
 import {
   fileIdParamSchema,
   requestUploadUrlSchema,
@@ -29,30 +23,6 @@ import {
 
 const router = Router();
 const controller = new FileController();
-
-// Cấu hình multer lưu buffer trong RAM (tối đa theo MEDIA_LIMITS) và lọc MIME type chặt chẽ
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: MEDIA_LIMITS.MAX_FILE_SIZE_BYTES,
-  },
-  fileFilter: (_req, file, cb) => {
-    const isSupported = (
-      SUPPORTED_IMAGE_MIME_TYPES as readonly string[]
-    ).includes(file.mimetype.toLowerCase());
-    if (isSupported) {
-      cb(null, true);
-    } else {
-      cb(
-        new AppError(
-          "Định dạng tệp không được hỗ trợ. Chỉ chấp nhận các định dạng ảnh (JPEG, PNG, WebP, AVIF, GIF, TIFF)",
-          400,
-          ERROR_CODE.VALIDATION_ERROR,
-        ),
-      );
-    }
-  },
-});
 
 // 1. Xin presigned upload URL (yêu cầu đăng nhập và có quyền FILE_UPLOAD hoặc FILE_MANAGE)
 router.post(
@@ -68,7 +38,7 @@ router.post(
   "/upload-image",
   authMiddleware,
   requireAnyPermission(PERMISSIONS.FILE_UPLOAD, PERMISSIONS.FILE_MANAGE),
-  upload.single("image"),
+  uploadImageMiddleware.single("image"),
   validate(directImageUploadSchema, "body"),
   controller.uploadImage,
 );

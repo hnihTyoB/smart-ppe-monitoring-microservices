@@ -459,21 +459,27 @@ export class AuthRepository {
     expiresAt: Date,
     userAgent?: string,
     ipAddress?: string,
-  ) {
+  ): Promise<{ rotated: boolean; reason?: "EXPIRED" | "REUSED" }> {
     const hashedOldToken = hashToken(oldToken);
     const hashedNewToken = hashToken(newToken);
     return prisma.$transaction(async (tx) => {
-      const deleted = await tx.refreshToken.deleteMany({
+      const existing = await tx.refreshToken.findUnique({
         where: { token: hashedOldToken },
       });
 
-      if (deleted.count === 0) {
+      if (!existing) {
         // Automatic Token Family Invalidation (RFC 6819):
         // If an already rotated/revoked refresh token is re-sent, invalidate all active tokens for this user
         await tx.refreshToken.deleteMany({ where: { userId } });
-        return { rotated: false };
+        return { rotated: false, reason: "REUSED" };
       }
 
+      if (existing.expiresAt < new Date()) {
+        await tx.refreshToken.delete({ where: { id: existing.id } });
+        return { rotated: false, reason: "EXPIRED" };
+      }
+
+      await tx.refreshToken.delete({ where: { id: existing.id } });
       await tx.refreshToken.create({
         data: {
           userId,

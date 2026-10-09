@@ -309,14 +309,7 @@ export class AuthController {
     next: NextFunction,
   ) => {
     try {
-      const currentToken = req.cookies?.refreshToken || req.body.refreshToken;
-      if (!currentToken) {
-        throw new AppError(
-          "Current session token is required",
-          400,
-          ERROR_CODE.TOKEN_INVALID,
-        );
-      }
+      const currentToken = req.body?.refreshToken || req.cookies?.refreshToken;
       await this.service.revokeAllOtherSessions(req.user.id, currentToken);
       res.json({
         success: true,

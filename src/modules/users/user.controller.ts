@@ -74,7 +74,10 @@ export class UserController {
     try {
       const { id } = req.params;
       const adminId = req.user.id;
-      await this.service.softDelete(id, adminId);
+      await this.service.softDelete(id, adminId, {
+        ipAddress: req.ip,
+        userAgent: req.headers["user-agent"],
+      });
 
       res.json({
         success: true,

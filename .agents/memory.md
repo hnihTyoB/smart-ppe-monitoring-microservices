@@ -785,3 +785,38 @@
     - `tests/integration-live-server.test.ts`: Toàn bộ 24/24 integration tests chạy qua Gateway (`http://localhost`) PASS 100%.
     - `pnpm test`, `pnpm build`, `pnpm run lint`: Tất cả đều vượt qua với 0 lỗi.
 
+- **Clean Architecture & Code Review Remediation (13 Hạng mục Open Code Review) (2026-10-09)**:
+  - **1. Transactional Outbox Integrity (P0 - Critical)**: Trong `EventBusService.publish()`, khi caller truyền `options.tx`, nếu việc ghi bản ghi outbox thất bại thì bắt buộc re-throw lỗi ngay để rollback đồng bộ transaction nghiệp vụ, triệt tiêu nguy cơ Ghost Events khi database rollback.
+  - **2. Repository Boundary & Generic Error Elimination (P0 - Critical)**: Loại bỏ hoàn toàn logic kiểm tra ownership và `throw new Error(...)` trong `FileRepository.delete(id)`; Repository chỉ thực hiện truy vấn DB thuần túy.
+  - **3. Controller vs Service Layering (P1 - High)**: Chuyển toàn bộ logic ký JWT token cho SSE stream ticket từ `NotificationController` sang `NotificationService.createStreamTicket()` (sử dụng `jwtConfig.tempSecret` và `JWT_PURPOSE.SSE_STREAM_TICKET`), bổ sung try/catch/next đầy đủ ở controller.
+  - **4. Strict HTTP Validation Boundary (P1 - High)**: Gắn `populateRefreshToken` vào route `DELETE /api/v1/auth/sessions`, cập nhật schema `revokeOtherSessionsSchema` yêu cầu `refreshToken`, loại bỏ code kiểm tra thủ công trong `AuthController`.
+  - **5. User Soft-Delete Audit Logging (P1 - High)**: Thêm hằng số `AUDIT_ACTION.DELETE_USER`, bổ sung gọi `createAuditLog` trong `UserService.softDelete()`, truyền metadata từ controller.
+  - **6. Domain Data Centralization (P1 - High)**: Chuyển toàn bộ truy vấn trực tiếp bảng `User` (`getAllUserAvatarUrls`, `findAdminUsers`) từ `CronRepository` sang `UserRepository`; `CronRepository` inject `UserRepository` và ủy quyền truy vấn.
+  - **7. Transaction Timeout Consistency (P2 - Medium)**: Xác thực các Interactive Transactions (`prisma.$transaction(async (tx) => ...)`) đều cấu hình `DEFAULT_TRANSACTION_OPTIONS`, phân biệt rõ ràng với Batch Pipeline Transactions (`prisma.$transaction([ ... ])`) gửi nguyên tử trực tiếp tới database engine.
+  - **8 & 9. Standardized Pagination Contract (P2 - Medium)**: Đồng bộ cấu trúc trả về `{ data, meta }` trong `NotificationRepository.findEmails`, `NotificationRepository.findTemplates` và `IntegrationRepository.findDeliveriesByWebhookId`.
+  - **10 & 11. Elimination of Magic Strings (P2 - Medium)**: Thay thế chuỗi trạng thái email hard-code bằng `EMAIL_STATUS.PROCESSING`, `EMAIL_STATUS.PENDING` và thay `"SYSTEM"` bằng `SYSTEM_TARGET_ID`.
+  - **12. Isolated Multer Middleware (P3 - Low)**: Tách cấu hình multer memory storage và MIME filter từ `file.route.ts` sang middleware độc lập `src/middlewares/upload.middleware.ts`.
+  - **13. Lazy Satellite Database Clients (P3 - Low)**: Refactor 5 database clients vệ tinh (`cameraPrisma`, `incidentPrisma`, `notificationPrisma`, `reportingPrisma`, `sitePrisma`) sang cơ chế ES6 Proxy Lazy Singleton, tối ưu hóa RAM và connection pool khi chạy monolithic.
+- **Full Security Audit & Codebase Vulnerability Remediation (2026-10-09)**:
+  - **1. Supply Chain & CVE Elimination (P0 - Critical / SEC-01 & SEC-03)**:
+    - Bổ sung `"proxy-addr": "^2.0.8"` vào `pnpm.overrides` trong `package.json` để vá lỗ hổng IP Spoofing qua IPv4-mapped IPv6 trust proxy (GHSA-jqcg-44mw-7w3h).
+    - Nâng cấp `sharp` lên phiên bản `^0.35.5` để vá lỗ hổng DoS `librsvg` (CVE-2026-96889).
+    - Xác thực `pnpm audit --prod` sạch hoàn toàn với 0 vulnerabilities.
+  - **2. RFC 6819 Token Family Revocation Hardening (P0 - Critical / SEC-02)**:
+    - Trong `src/modules/auth/auth.repository.ts`: Tối ưu hóa `rotateRefreshToken` thành transaction nguyên tử phân biệt rõ token hết hạn hợp lệ (`EXPIRED`) với token đã bị xoay vòng / gửi lại trái phép (`REUSED`). Khi phát hiện replay, tự động xóa toàn bộ refresh tokens của user để bảo vệ tài khoản.
+    - Trong `src/modules/auth/auth.service.ts`: Loại bỏ bước truy vấn `findRefreshToken` độc lập trước khi xoay vòng; kích hoạt trọn vẹn chu trình phát hiện replay và thu hồi token family theo RFC 6819.
+  - **3. Production SMTP TLS Certificate Verification (P1 - High / SEC-04)**:
+    - Trong `src/common/services/mail.service.ts`: Cập nhật cấu hình transporter `rejectUnauthorized: envConfig.nodeEnv === "development" ? false : true`, triệt tiêu rủi ro Man-In-The-Middle (MITM) đánh chặn email chứa token nhạy cảm trong môi trường production.
+  - **4. Schema & Contract Synchronization (P1 - High / DEV-01 & DEV-02)**:
+    - Trong `src/modules/auth/auth.validation.ts`: Cấu hình `revokeOtherSessionsSchema` chấp nhận `refreshToken: z.string().optional()`.
+    - Trong `src/modules/auth/auth.controller.ts`: Hỗ trợ fallback lấy refresh token từ cả `req.body` và `req.cookies`.
+    - Trong `tests/audit-remediation.test.ts`: Cập nhật assertion test case 19 (`P2-CRON-01`) để thẩm định việc ủy quyền Clean Architecture sang `UserRepository.findAdminUsers()`.
+  - **5. User Enumeration Defense on Login (P2 - Medium / SEC-05)**:
+    - Trong `src/modules/auth/auth.service.ts`: Chuyển kiểm tra trạng thái kích hoạt tài khoản `!user.isActive` ra sau bước so sánh mật khẩu `bcrypt.compare`, ngăn chặn tấn công dò quét email chưa kích hoạt (ASVS V2.1.7).
+  - **Automated Verification**:
+    - `tests/audit-remediation.test.ts`: 45/45 tests pass 100%.
+    - `tests/full-audit-remediation.test.ts`: 5/5 tests pass 100%.
+    - `pnpm audit --prod`: 0 vulnerabilities.
+    - `pnpm run lint`: ESLint 0 errors / 0 warnings.
+    - `pnpm build`: TypeScript compile 0 errors.
+

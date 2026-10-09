@@ -537,6 +537,71 @@ export class UserRepository {
     });
   }
 
+  /**
+   * Lấy toàn bộ danh sách avatarUrl hiện tại của các User đang lưu trong DB
+   */
+  async getAllUserAvatarUrls(): Promise<string[]> {
+    const users = await prisma.user.findMany({
+      where: {
+        avatarUrl: { not: null },
+      },
+      select: {
+        avatarUrl: true,
+      },
+    });
+
+    return users
+      .map((u) => u.avatarUrl)
+      .filter((url): url is string => Boolean(url));
+  }
+
+  /**
+   * Lấy danh sách email của tất cả người dùng có quyền Quản trị (vai trò ADMIN / SUPER_ADMIN)
+   */
+  async findAdminUsers(): Promise<
+    Array<{ id: string; email: string; fullName: string | null }>
+  > {
+    const admins = await prisma.user.findMany({
+      where: {
+        isActive: true,
+        deletedAt: null,
+        email: { not: null },
+        OR: [
+          { role: { name: ROLES.ADMIN } },
+          {
+            role: {
+              permissions: {
+                some: {
+                  permission: {
+                    name: {
+                      in: [
+                        PERMISSIONS.USER_ROLE_ASSIGN,
+                        PERMISSIONS.ROLE_PERMISSION_ASSIGN,
+                        PERMISSIONS.AUDIT_LOG_READ,
+                        PERMISSIONS.CRON_JOB_READ,
+                      ],
+                    },
+                  },
+                },
+              },
+            },
+          },
+        ],
+      },
+      select: {
+        id: true,
+        email: true,
+        fullName: true,
+      },
+    });
+
+    return admins as Array<{
+      id: string;
+      email: string;
+      fullName: string | null;
+    }>;
+  }
+
   // ────── Audit Log ──────
 
   createAuditLog(data: {

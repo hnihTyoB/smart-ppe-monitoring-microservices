@@ -120,6 +120,7 @@ router.delete(
 router.delete(
   "/sessions",
   authMiddleware,
+  populateRefreshToken,
   validate(revokeOtherSessionsSchema),
   controller.revokeOtherSessions,
 );

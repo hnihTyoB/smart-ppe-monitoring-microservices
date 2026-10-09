@@ -9,9 +9,22 @@ export const DEFAULT_CAMERA_TRANSACTION_OPTIONS = {
   timeout: 15000,
 } as const;
 
-export const cameraPrisma = new CameraPrismaClient({
-  log:
-    envConfig.nodeEnv === "development"
-      ? ["query", "error", "warn"]
-      : ["error", "warn"],
+let _cameraPrisma: CameraPrismaClient | null = null;
+
+export function getCameraPrisma(): CameraPrismaClient {
+  if (!_cameraPrisma) {
+    _cameraPrisma = new CameraPrismaClient({
+      log:
+        envConfig.nodeEnv === "development"
+          ? ["query", "error", "warn"]
+          : ["error", "warn"],
+    });
+  }
+  return _cameraPrisma;
+}
+
+export const cameraPrisma = new Proxy({} as CameraPrismaClient, {
+  get(_target, prop) {
+    return (getCameraPrisma() as any)[prop];
+  },
 });

@@ -169,7 +169,11 @@ export class UserService {
     return updatedUser;
   }
 
-  async softDelete(id: string, adminId: string) {
+  async softDelete(
+    id: string,
+    adminId: string,
+    metadata?: { ipAddress?: string; userAgent?: string },
+  ) {
     if (id === adminId) {
       throw new AppError(
         "Cannot delete your own account",
@@ -209,6 +213,16 @@ export class UserService {
 
     const result = await this.repository.softDelete(id, adminId);
     permissionCacheService.invalidateUser(id);
+
+    await this.repository.createAuditLog({
+      actorId: adminId,
+      action: AUDIT_ACTION.DELETE_USER,
+      targetType: AUDIT_TARGET_TYPE.USER,
+      targetId: id,
+      details: { deletedBy: adminId },
+      ipAddress: metadata?.ipAddress,
+      userAgent: metadata?.userAgent,
+    });
 
     const [deletedUser] = result;
     const deletedAt = deletedUser?.deletedAt || new Date();

@@ -70,7 +70,7 @@ export class MailService {
         pass: mailConfig.auth.pass,
       },
       tls: {
-        rejectUnauthorized: false,
+        rejectUnauthorized: envConfig.nodeEnv === "development" ? false : true,
         servername: mailConfig.host || "smtp.gmail.com",
       },
       // Fast timeout: on cloud environments (e.g. Render free tier) with blocked SMTP ports, fail quickly
