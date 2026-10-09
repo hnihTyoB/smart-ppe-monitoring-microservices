@@ -12,6 +12,11 @@ import fileRoute from "../modules/files/file.route";
 import securityTxtRoute from "../modules/security-txt/security-txt.route";
 import { jwksRoute } from "../modules/jwks/jwks.route";
 import { maintenanceGuard } from "../middlewares/maintenance.middleware";
+import {
+  siteRouter,
+  zoneRouter,
+  restrictedAreaRouter,
+} from "../modules/site/site.route";
 
 const router = Router();
 
@@ -36,4 +41,10 @@ router.use("/integration", integrationRoute);
 router.use("/cron", cronRoute);
 router.use("/files", fileRoute);
 
+// PPE Site Management Microservice Endpoints
+router.use("/sites", siteRouter);
+router.use("/zones", zoneRouter);
+router.use("/restricted-areas", restrictedAreaRouter);
+
 export default router;
+

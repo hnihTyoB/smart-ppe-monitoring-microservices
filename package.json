@@ -1,7 +1,7 @@
 {
-  "name": "template-be",
+  "name": "smart-ppe-monitoring-microservices",
   "version": "1.0.0",
-  "description": "Backend REST API Template (NodeJS, Express, TypeScript, Prisma, PostgreSQL)",
+  "description": "Backend Microservices cho Hệ thống Giám sát An toàn Lao động Thông minh (Smart PPE Monitoring System)",
   "main": "dist/server.js",
   "packageManager": "pnpm@9.15.0",
   "scripts": {
@@ -10,12 +10,15 @@
     "dev:worker": "ts-node-dev --respawn --transpile-only src/worker.server.ts",
     "dev:notification": "ts-node-dev --respawn --transpile-only src/notification.server.ts",
     "dev:media": "ts-node-dev --respawn --transpile-only src/media.server.ts",
+    "dev:site": "ts-node-dev --respawn --transpile-only src/site.server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
     "start:api": "node dist/api.server.js",
     "start:worker": "node dist/worker.server.js",
     "start:notification": "node dist/notification.server.js",
     "start:media": "node dist/media.server.js",
+    "start:site": "node dist/site.server.js",
+
     "prisma:generate": "node scripts/prisma-service.js identity generate",
     "prisma:generate:identity": "node scripts/prisma-service.js identity generate",
     "prisma:generate:site": "node scripts/prisma-service.js site generate",

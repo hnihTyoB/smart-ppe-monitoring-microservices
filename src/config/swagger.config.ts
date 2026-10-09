@@ -12,11 +12,13 @@ import { registerHealthOpenApi } from "../modules/health/health.openapi";
 import { registerFileOpenApi } from "../modules/files/file.openapi";
 import { registerSecurityTxtOpenApi } from "../modules/security-txt/security-txt.openapi";
 import { registerJwksOpenApi } from "../modules/jwks/jwks.openapi";
+import { registerSiteOpenApi } from "../modules/site/site.openapi";
 
 // Tự động khởi tạo và đăng ký 100% routes & schemas từ Zod validation schemas
 registerAuthOpenApi();
 registerUserOpenApi();
 registerRbacOpenApi();
+registerSiteOpenApi();
 registerNotificationOpenApi();
 registerMaintenanceOpenApi();
 registerIntegrationOpenApi();

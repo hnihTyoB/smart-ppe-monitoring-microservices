@@ -107,6 +107,12 @@ const envSchema = z
     MEDIA_SERVICE_STANDALONE: z.string().default("false"),
     MEDIA_SERVICE_URL: z.string().default("http://localhost:8890"),
 
+    // ── Site Management Service (Database-per-Service Architecture :8891) ─────
+    SITE_PORT: z.coerce.number().int().positive().default(8891),
+    SITE_SERVICE_STANDALONE: z.string().default("false"),
+    SITE_SERVICE_URL: z.string().default("http://localhost:8891"),
+
+
     // ── Webhook ───────────────────────────────────────────────────────────────
     WEBHOOK_MAX_ATTEMPTS: z.coerce.number().int().positive().default(5),
     WEBHOOK_TIMEOUT_MS: z.coerce.number().int().positive().default(10000),
@@ -399,6 +405,12 @@ export const envConfig = {
     standalone: _env.MEDIA_SERVICE_STANDALONE === "true",
     serviceUrl: _env.MEDIA_SERVICE_URL,
   },
+  site: {
+    port: _env.SITE_PORT,
+    standalone: _env.SITE_SERVICE_STANDALONE === "true",
+    serviceUrl: _env.SITE_SERVICE_URL,
+  },
+
   rateLimit: {
     windowMs: _env.RATE_LIMIT_WINDOW_MS,
     maxRequests: _env.RATE_LIMIT_MAX_REQUESTS,

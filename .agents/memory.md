@@ -820,3 +820,64 @@
     - `pnpm run lint`: ESLint 0 errors / 0 warnings.
     - `pnpm build`: TypeScript compile 0 errors.
 
+- **PPE Microservices: Task BE-03 - Identity, Auth & Dynamic RBAC Service (2026-10-09)**:
+  - **Mục tiêu**: Hoàn thiện module Identity / Auth & RBAC Service theo phân công đồ án PPE Microservices (`BE-03`) và đặc tả thiết kế chi tiết trong `D08.pdf`.
+  - **1. Dynamic RBAC & Permission-First Architecture**:
+    - Bảo đảm kiểm soát truy cập biên HTTP tại các routes 100% bằng permissions (`requirePermission`, `requireAnyPermission`), tuyệt đối không hardcode kiểm tra tên vai trò trong logic authorization.
+    - Mọi vai trò (Roles) trong hệ thống đều là thực thể động: Admin có thể tạo bất kỳ vai trò mới nào (`POST /api/v1/rbac/roles`) kèm danh sách quyền mong muốn; vai trò mới có hiệu lực ngay lập tức mà không cần sửa code hay restart server.
+  - **2. PPE Role & Permission Taxonomy**:
+    - Cập nhật `src/common/constants/role.constant.ts`: Bổ sung `SAFETY_MANAGER` và `SAFETY_OFFICER`, đồng thời bảo lưu `ADMIN`, `MANAGER`, `USER` cho tính tương thích ngược tuyệt đối.
+    - Cập nhật `src/common/constants/permission.constant.ts`: Bổ sung đầy đủ 17 quyền hạn chuyên biệt cho miền PPE:
+      - Site & Zone: `PPE_SITE_READ`, `PPE_SITE_MANAGE`, `PPE_ZONE_READ`, `PPE_ZONE_MANAGE`, `PPE_RESTRICTED_AREA_READ`, `PPE_RESTRICTED_AREA_MANAGE`.
+      - Camera: `PPE_CAMERA_READ`, `PPE_CAMERA_MANAGE`.
+      - Safety Config & AI Thresholds: `PPE_SAFETY_CONFIG_READ`, `PPE_SAFETY_CONFIG_MANAGE`.
+      - Incident & Human Review: `PPE_INCIDENT_READ`, `PPE_INCIDENT_REVIEW`, `PPE_INCIDENT_UPDATE`, `PPE_INCIDENT_DELETE`, `PPE_INCIDENT_MANAGE`.
+      - Reporting & AI Metrics: `PPE_REPORTING_READ`, `PPE_REPORTING_EXPORT`, `PPE_AI_METRICS_READ`.
+      - AI Model Governance: `PPE_MODEL_READ`, `PPE_MODEL_MANAGE`.
+  - **3. System Roles & Anti-Lockout Defense**:
+    - Trong `src/modules/rbac/rbac.service.ts`: Bảo vệ toàn bộ vai trò hệ thống (`isSystem = true`) khỏi việc đổi tên hoặc xóa bỏ.
+  - **4. Database Seeding (`prisma/seed.ts`)**:
+    - Seed đầy đủ toàn bộ permissions PPE vào CSDL `ppe_identity_db`.
+    - Seed 3 vai trò hệ thống chuẩn: `ADMIN`, `SAFETY_MANAGER`, `SAFETY_OFFICER`.
+    - Seed 3 tài khoản chuẩn đồ án sẵn sàng kiểm thử và demo:
+      - `admin@ppe.local` / `Admin@123456` (`ADMIN`)
+      - `manager@ppe.local` / `Manager@123456` (`SAFETY_MANAGER`)
+      - `officer@ppe.local` / `Officer@123456` (`SAFETY_OFFICER`)
+  - **5. Frontend Propagation Readiness (FE-01)**:
+    - Token và API profile (`/api/v1/auth/me`, `/api/v1/auth/login`) cung cấp đầy đủ `role` và `permissions: string[]` phục vụ Route Guard và Role-Aware Navigation trên frontend.
+- **PPE Microservices: Task BE-04 - Site Management Service (2026-10-09)**:
+  - **Mục tiêu**: Hoàn thiện toàn diện module Site Management Service theo phân công đồ án PPE Microservices (`BE-04`), đặc tả thiết kế chi tiết trong `D08.pdf`, và kiến trúc microservices độc lập (`ppe_site_db`).
+  - **1. Kiến trúc phân tầng 5 lớp chuẩn mực**:
+    - `site.constant.ts`: Định nghĩa tập trung `SITE_STATUS` (`ACTIVE`, `INACTIVE`, `COMPLETED`, `ARCHIVED`), `ZONE_STATUS` (`ACTIVE`, `INACTIVE`, `MAINTENANCE`), `RESTRICTED_AREA_STATUS` (`ACTIVE`, `INACTIVE`), và `DEFAULT_SAFETY_CONFIG` (ngưỡng 0.8, confirmation 3s, cooldown 30s,...).
+    - `site.dto.ts`: Định nghĩa đầy đủ DTO interfaces cho Site, Zone, SafetyConfig, RestrictedArea kèm `PaginatedResultDto`.
+    - `site.validation.ts`: Zod schema validation chặt chẽ ở biên HTTP (`UUID`, `code` regex, định dạng ngày `YYYY-MM-DD`, polygon tối thiểu 3 điểm, giới hạn ngưỡng an toàn).
+    - `site.repository.ts`: Truy vấn độc quyền trên `ppe_site_db` qua `sitePrisma` (`@prisma/client-site`) với interactive transaction `DEFAULT_SITE_TRANSACTION_OPTIONS`, phân trang chuẩn `calculatePaginationSkip` + `formatPaginationMeta`.
+    - `site.service.ts`: Xử lý nghiệp vụ, kiểm tra duy nhất mã `code` theo công trường, kiểm tra quan hệ phân cấp Site-Zone-RestrictedArea, tự động khởi tạo cấu hình an toàn mặc định, ném lỗi `AppError` và `ERROR_CODE`.
+    - `site.controller.ts`: Xử lý HTTP request/response, format dữ liệu chuẩn `{ success: true, data: ..., meta: ... }`, chuyển lỗi sang `next(error)`.
+    - `site.route.ts`: Bảo vệ 100% bằng dynamic RBAC permissions (`PPE_SITE_READ`, `PPE_SITE_MANAGE`, `PPE_ZONE_READ`, `PPE_ZONE_MANAGE`, `PPE_SAFETY_CONFIG_*`, `PPE_RESTRICTED_AREA_*`).
+    - `site.openapi.ts`: Đăng ký tài liệu OpenAPI 3.0 với `openapiRegistry` và Swagger UI.
+  - **2. Standalone Microservice & API Gateway Compatibility**:
+    - `src/site.app.ts`: Express application độc lập cho Site Service (:8891) tích hợp Helmet, CORS, Morgan, Request ID, Rate Limiting, Maintenance guard, và Health checks (`/health`, `/api/v1/sites/health`, `/sites/health`).
+    - `src/site.server.ts`: HTTP listener trên cổng 8891 (hoặc `SITE_PORT`) kèm graceful shutdown an toàn ngắt kết nối `sitePrisma`.
+    - `package.json`: Bổ sung scripts `dev:site` và `start:site`.
+    - Cấu hình Traefik Gateway tương thích 100% với `traefik/dynamic.yml` router `sites` (chuyển tiếp `/api/v1/sites`, `/api/v1/zones`, `/api/v1/restricted-areas`).
+  - **3. Dual-Mounting Monolith**:
+    - Tích hợp vào Monolith API router tại `src/routes/index.ts` dưới `/sites`, `/zones`, `/restricted-areas`.
+  - **4. Automated Verification**:
+    - Bộ test tự động chuyên dụng `tests/site-service.test.ts` (20/20 test cases PASS 100%).
+    - Bộ test hồi quy `tests/ppe-auth-rbac-be03.test.ts` (12/12 test cases PASS 100%).
+    - `pnpm exec prisma validate --schema=prisma/site/schema.prisma`: Schema hợp lệ 100%.
+    - `pnpm build`: TypeScript compile 0 lỗi (Strict Mode).
+    - `pnpm run lint`: ESLint 0 errors / 0 warnings.
+  - **5. Open Code Review Hardening (2026-10-09)**:
+    - Khắc phục triệt để các vấn đề kiến trúc và validation qua review:
+      - Bổ sung xác thực quan hệ ngày tháng `endDate >= startDate` trên `createSiteSchema` và `updateSiteSchema`.
+      - Cho phép `startDate` và `endDate` nhận `null` trong `updateSiteSchema` để client có thể chủ động gỡ bỏ ngày dự án.
+      - Bổ sung ràng buộc chặn payload rỗng `{}` trên toàn bộ update schemas (`updateSiteSchema`, `updateZoneSchema`, `updateRestrictedAreaSchema`, `updateSiteSafetyConfigSchema`).
+      - Thắt chặt kiểm tra tọa độ đa giác `polygonPointSchema` (`.finite()`, `.min(0)`) và giới hạn tối đa 50 đỉnh cho `boundary`.
+      - Chuyển orchestration điều phối vùng hạn chế của phân khu `getZoneRestrictedAreas` từ Controller về Service method chuyên dụng `findRestrictedAreasByZone`.
+      - Hỗ trợ tham số sắp xếp `sortBy` và `sortOrder` linh hoạt trong `siteQuerySchema`, `zoneQuerySchema`, `restrictedAreaQuerySchema` và tích hợp vào Repository queries.
+      - Đăng ký đầy đủ 5 endpoint lồng nhau (`/sites/{id}/zones`, `/sites/{id}/restricted-areas`, `/zones/{id}/restricted-areas`) trong OpenAPI registry (`site.openapi.ts`) cho Swagger UI.
+
+
+

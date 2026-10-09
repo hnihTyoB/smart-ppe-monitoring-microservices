@@ -228,6 +228,128 @@ const SYSTEM_PERMISSIONS = [
     description:
       "Toàn quyền quản trị tất cả tệp tin của người dùng trong hệ thống",
   },
+
+  // PPE Domain Permissions (Sites, Zones, Cameras, Safety Config, Incidents, Reporting, AI Models)
+  {
+    name: "PPE_SITE_READ",
+    resource: "PPE_SITE",
+    action: "READ",
+    description: "Xem danh sách và chi tiết công trường",
+  },
+  {
+    name: "PPE_SITE_MANAGE",
+    resource: "PPE_SITE",
+    action: "MANAGE",
+    description: "Quản trị tạo mới, cập nhật, xóa công trường",
+  },
+  {
+    name: "PPE_ZONE_READ",
+    resource: "PPE_ZONE",
+    action: "READ",
+    description: "Xem danh sách và chi tiết khu vực/zone",
+  },
+  {
+    name: "PPE_ZONE_MANAGE",
+    resource: "PPE_ZONE",
+    action: "MANAGE",
+    description: "Quản trị tạo mới, cập nhật, xóa khu vực",
+  },
+  {
+    name: "PPE_RESTRICTED_AREA_READ",
+    resource: "PPE_RESTRICTED_AREA",
+    action: "READ",
+    description: "Xem cấu hình vùng hạn chế nguy hiểm",
+  },
+  {
+    name: "PPE_RESTRICTED_AREA_MANAGE",
+    resource: "PPE_RESTRICTED_AREA",
+    action: "MANAGE",
+    description: "Khai báo, vẽ và cấu hình vùng hạn chế trên camera",
+  },
+  {
+    name: "PPE_CAMERA_READ",
+    resource: "PPE_CAMERA",
+    action: "READ",
+    description: "Xem danh sách camera, luồng RTSP và trạng thái",
+  },
+  {
+    name: "PPE_CAMERA_MANAGE",
+    resource: "PPE_CAMERA",
+    action: "MANAGE",
+    description: "Thêm mới, cấu hình luồng RTSP và quản lý camera",
+  },
+  {
+    name: "PPE_SAFETY_CONFIG_READ",
+    resource: "PPE_SAFETY_CONFIG",
+    action: "READ",
+    description: "Xem cấu hình ngưỡng an toàn và quy tắc phát hiện vi phạm",
+  },
+  {
+    name: "PPE_SAFETY_CONFIG_MANAGE",
+    resource: "PPE_SAFETY_CONFIG",
+    action: "MANAGE",
+    description: "Cập nhật ngưỡng confidence, thời gian xác nhận và cooldown",
+  },
+  {
+    name: "PPE_INCIDENT_READ",
+    resource: "PPE_INCIDENT",
+    action: "READ",
+    description: "Tra cứu danh sách sự cố vi phạm PPE và bằng chứng",
+  },
+  {
+    name: "PPE_INCIDENT_REVIEW",
+    resource: "PPE_INCIDENT",
+    action: "REVIEW",
+    description: "Xác nhận vi phạm: True Violation hoặc False Alarm",
+  },
+  {
+    name: "PPE_INCIDENT_UPDATE",
+    resource: "PPE_INCIDENT",
+    action: "UPDATE",
+    description: "Ghi chú xử lý, phân công và đóng sự cố vi phạm",
+  },
+  {
+    name: "PPE_INCIDENT_DELETE",
+    resource: "PPE_INCIDENT",
+    action: "DELETE",
+    description: "Xóa bản ghi sự cố vi phạm",
+  },
+  {
+    name: "PPE_INCIDENT_MANAGE",
+    resource: "PPE_INCIDENT",
+    action: "MANAGE",
+    description: "Toàn quyền quản trị sự cố vi phạm PPE",
+  },
+  {
+    name: "PPE_REPORTING_READ",
+    resource: "PPE_REPORTING",
+    action: "READ",
+    description: "Xem dashboard tổng hợp, thống kê vi phạm an toàn",
+  },
+  {
+    name: "PPE_REPORTING_EXPORT",
+    resource: "PPE_REPORTING",
+    action: "EXPORT",
+    description: "Xuất báo cáo vi phạm an toàn (PDF/Excel)",
+  },
+  {
+    name: "PPE_AI_METRICS_READ",
+    resource: "PPE_REPORTING",
+    action: "READ_METRICS",
+    description: "Theo dõi False Alert Rate và hiệu quả hệ thống AI",
+  },
+  {
+    name: "PPE_MODEL_READ",
+    resource: "PPE_MODEL",
+    action: "READ",
+    description: "Xem danh sách và thông tin phiên bản mô hình AI (YOLO)",
+  },
+  {
+    name: "PPE_MODEL_MANAGE",
+    resource: "PPE_MODEL",
+    action: "MANAGE",
+    description: "Quản lý triển khai, cập nhật mô hình AI",
+  },
 ];
 
 const USER_BASE_PERMISSIONS: string[] = [
@@ -235,6 +357,43 @@ const USER_BASE_PERMISSIONS: string[] = [
   "FILE_READ",
   "FILE_UPLOAD",
   "FILE_DELETE",
+];
+
+const SAFETY_MANAGER_PERMISSIONS: string[] = [
+  "PPE_SITE_READ",
+  "PPE_SITE_MANAGE",
+  "PPE_ZONE_READ",
+  "PPE_ZONE_MANAGE",
+  "PPE_RESTRICTED_AREA_READ",
+  "PPE_RESTRICTED_AREA_MANAGE",
+  "PPE_CAMERA_READ",
+  "PPE_CAMERA_MANAGE",
+  "PPE_SAFETY_CONFIG_READ",
+  "PPE_SAFETY_CONFIG_MANAGE",
+  "PPE_INCIDENT_READ",
+  "PPE_INCIDENT_REVIEW",
+  "PPE_INCIDENT_UPDATE",
+  "PPE_INCIDENT_MANAGE",
+  "PPE_REPORTING_READ",
+  "PPE_REPORTING_EXPORT",
+  "PPE_AI_METRICS_READ",
+  "PPE_MODEL_READ",
+  "NOTIFICATION_READ",
+  "FILE_READ",
+  "FILE_UPLOAD",
+];
+
+const SAFETY_OFFICER_PERMISSIONS: string[] = [
+  "PPE_INCIDENT_READ",
+  "PPE_INCIDENT_REVIEW",
+  "PPE_INCIDENT_UPDATE",
+  "PPE_CAMERA_READ",
+  "PPE_SITE_READ",
+  "PPE_ZONE_READ",
+  "PPE_RESTRICTED_AREA_READ",
+  "PPE_SAFETY_CONFIG_READ",
+  "NOTIFICATION_READ",
+  "FILE_READ",
 ];
 
 const MANAGER_PERMISSIONS: string[] = [
@@ -293,6 +452,16 @@ async function main() {
       isSystem: true,
     },
     {
+      name: "SAFETY_MANAGER",
+      description: "Quản lý an toàn công trường (Công trường, Camera, Cấu hình AI, Báo cáo)",
+      isSystem: true,
+    },
+    {
+      name: "SAFETY_OFFICER",
+      description: "Cán bộ an toàn trực ban (Giám sát cảnh báo, Duyệt True/False Alarm, Xử lý sự cố)",
+      isSystem: true,
+    },
+    {
       name: "MANAGER",
       description: "Quản lý tài chính và người dùng",
       isSystem: true,
@@ -321,6 +490,8 @@ async function main() {
   // 3. Seed Role-Permissions Mapping
   const rolePermissionAssignments: Record<string, string[]> = {
     ADMIN: SYSTEM_PERMISSIONS.map((p) => p.name),
+    SAFETY_MANAGER: SAFETY_MANAGER_PERMISSIONS,
+    SAFETY_OFFICER: SAFETY_OFFICER_PERMISSIONS,
     MANAGER: MANAGER_PERMISSIONS,
     USER: USER_BASE_PERMISSIONS,
   };
@@ -351,17 +522,56 @@ async function main() {
   }
 
   // 4. Seed Standard Users
-  const adminEmail = "admin@template.local";
   const adminPassword = await bcrypt.hash("Admin@123456", 10);
-
-  const managerEmail = "manager@template.local";
   const managerPassword = await bcrypt.hash("Manager@123456", 10);
-
-  const userEmail = "user@template.local";
+  const officerPassword = await bcrypt.hash("Officer@123456", 10);
   const userPassword = await bcrypt.hash("User@123456", 10);
 
+  // 4.1 PPE Standard Accounts (D08.pdf specifications)
+  const ppeUsers = [
+    {
+      email: "admin@ppe.local",
+      password: adminPassword,
+      fullName: "Quản Trị Viên Hệ Thống",
+      role: "ADMIN",
+    },
+    {
+      email: "manager@ppe.local",
+      password: managerPassword,
+      fullName: "Nguyễn Văn Quản Lý (Safety Manager)",
+      role: "SAFETY_MANAGER",
+    },
+    {
+      email: "officer@ppe.local",
+      password: officerPassword,
+      fullName: "Trần Thị An Toàn (Safety Officer)",
+      role: "SAFETY_OFFICER",
+    },
+  ];
+
+  for (const u of ppeUsers) {
+    await prisma.user.upsert({
+      where: { email: u.email },
+      update: {
+        password: u.password,
+        fullName: u.fullName,
+        roleId: roleMap[u.role],
+        isActive: true,
+      },
+      create: {
+        email: u.email,
+        password: u.password,
+        fullName: u.fullName,
+        roleId: roleMap[u.role],
+        isActive: true,
+      },
+    });
+    console.log(`User ${u.email} upserted with role ${u.role}`);
+  }
+
+  // 4.2 Legacy Template Accounts (Backward Compatibility)
   await prisma.user.upsert({
-    where: { email: adminEmail },
+    where: { email: "admin@template.local" },
     update: {
       password: adminPassword,
       fullName: "Admin",
@@ -369,7 +579,7 @@ async function main() {
       isActive: true,
     },
     create: {
-      email: adminEmail,
+      email: "admin@template.local",
       password: adminPassword,
       fullName: "Admin",
       roleId: roleMap["ADMIN"],
@@ -378,24 +588,24 @@ async function main() {
   });
 
   await prisma.user.upsert({
-    where: { email: managerEmail },
+    where: { email: "manager@template.local" },
     update: {
       password: managerPassword,
       fullName: "Manager",
-      roleId: roleMap["MANAGER"],
+      roleId: roleMap["MANAGER"] || roleMap["SAFETY_MANAGER"],
       isActive: true,
     },
     create: {
-      email: managerEmail,
+      email: "manager@template.local",
       password: managerPassword,
       fullName: "Manager",
-      roleId: roleMap["MANAGER"],
+      roleId: roleMap["MANAGER"] || roleMap["SAFETY_MANAGER"],
       isActive: true,
     },
   });
 
   await prisma.user.upsert({
-    where: { email: userEmail },
+    where: { email: "user@template.local" },
     update: {
       password: userPassword,
       fullName: "User",
@@ -403,7 +613,7 @@ async function main() {
       isActive: true,
     },
     create: {
-      email: userEmail,
+      email: "user@template.local",
       password: userPassword,
       fullName: "User",
       roleId: roleMap["USER"],

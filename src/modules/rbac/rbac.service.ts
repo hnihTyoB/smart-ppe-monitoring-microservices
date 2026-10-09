@@ -116,7 +116,7 @@ export class RbacService {
     if (data.name && data.name !== role.name) {
       if (role.isSystem) {
         throw new AppError(
-          "Cannot rename system roles (ADMIN, MANAGER, USER)",
+          `Cannot rename system role '${role.name}'`,
           400,
           ERROR_CODE.VALIDATION_ERROR,
         );
@@ -159,7 +159,7 @@ export class RbacService {
 
     if (role.isSystem) {
       throw new AppError(
-        "Cannot delete system roles (ADMIN, MANAGER, USER)",
+        `Cannot delete system role '${role.name}'`,
         400,
         ERROR_CODE.VALIDATION_ERROR,
       );
