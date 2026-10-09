@@ -112,6 +112,12 @@ const envSchema = z
     SITE_SERVICE_STANDALONE: z.string().default("false"),
     SITE_SERVICE_URL: z.string().default("http://localhost:8891"),
 
+    // ── Camera Management Service (Database-per-Service Architecture :8892) ───
+    CAMERA_PORT: z.coerce.number().int().positive().default(8892),
+    CAMERA_SERVICE_STANDALONE: z.string().default("false"),
+    CAMERA_SERVICE_URL: z.string().default("http://localhost:8892"),
+
+
 
     // ── Webhook ───────────────────────────────────────────────────────────────
     WEBHOOK_MAX_ATTEMPTS: z.coerce.number().int().positive().default(5),
@@ -410,6 +416,12 @@ export const envConfig = {
     standalone: _env.SITE_SERVICE_STANDALONE === "true",
     serviceUrl: _env.SITE_SERVICE_URL,
   },
+  camera: {
+    port: _env.CAMERA_PORT,
+    standalone: _env.CAMERA_SERVICE_STANDALONE === "true",
+    serviceUrl: _env.CAMERA_SERVICE_URL,
+  },
+
 
   rateLimit: {
     windowMs: _env.RATE_LIMIT_WINDOW_MS,

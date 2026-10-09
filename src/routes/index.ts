@@ -17,6 +17,10 @@ import {
   zoneRouter,
   restrictedAreaRouter,
 } from "../modules/site/site.route";
+import {
+  cameraRouter,
+  cameraStreamRouter,
+} from "../modules/camera/camera.route";
 
 const router = Router();
 
@@ -45,6 +49,10 @@ router.use("/files", fileRoute);
 router.use("/sites", siteRouter);
 router.use("/zones", zoneRouter);
 router.use("/restricted-areas", restrictedAreaRouter);
+
+// PPE Camera Management Microservice Endpoints
+router.use("/cameras", cameraRouter);
+router.use("/camera-streams", cameraStreamRouter);
 
 export default router;
 

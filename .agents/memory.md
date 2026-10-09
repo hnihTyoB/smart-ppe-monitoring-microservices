@@ -879,5 +879,39 @@
       - Hỗ trợ tham số sắp xếp `sortBy` và `sortOrder` linh hoạt trong `siteQuerySchema`, `zoneQuerySchema`, `restrictedAreaQuerySchema` và tích hợp vào Repository queries.
       - Đăng ký đầy đủ 5 endpoint lồng nhau (`/sites/{id}/zones`, `/sites/{id}/restricted-areas`, `/zones/{id}/restricted-areas`) trong OpenAPI registry (`site.openapi.ts`) cho Swagger UI.
 
-
-
+- **PPE Microservices: Task BE-05 - Camera Management Service (2026-10-09)**:
+  - **Mục tiêu**: Hoàn thiện toàn diện module Camera Management Service theo phân công đồ án PPE Microservices (`BE-05`), đặc tả thiết kế chi tiết trong `D08.pdf`, và kiến trúc microservices độc lập (`ppe_camera_db`).
+  - **1. Kiến trúc phân tầng 5 lớp chuẩn mực**:
+    - `camera.constant.ts`: Định nghĩa tập trung `CAMERA_STATUS` (`ONLINE`, `OFFLINE`, `CONNECTING`, `ERROR`, `MAINTENANCE`), `CAMERA_SOURCE_TYPE` (`RTSP`, `HLS`, `HTTP`, `FILE`), `STREAM_PROTOCOL` (`RTSP`, `HLS`, `WEBRTC`), `STREAM_STATUS` (`ACTIVE`, `INACTIVE`), và `DEFAULT_CAMERA_CONFIG` (`captureFps: 10`, `resolution: "1920x1080"`, `enabled: true`, `processingEnabled: true`).
+    - `camera.dto.ts`: Định nghĩa đầy đủ DTO interfaces cho Camera, Streams, Config, Health probe, và `PaginatedResultDto`.
+    - `camera.validation.ts`: Zod schema validation chặt chẽ ở biên HTTP (`UUID`, `code` regex, `streamUrl` độ dài và định dạng, captureFps $[1, 30]$, chặn payload rỗng `{}` khi cập nhật).
+    - `camera.repository.ts`: Truy vấn độc quyền trên `ppe_camera_db` qua `cameraPrisma` (`@prisma/client-camera`) với interactive transactions `DEFAULT_CAMERA_TRANSACTION_OPTIONS`, tự động tạo `CameraConfig` và default `CameraStream` khi tạo mới camera, phân trang chuẩn `calculatePaginationSkip` + `formatPaginationMeta`.
+    - `camera.service.ts`: Xử lý nghiệp vụ chống trùng mã camera `code`, kiểm tra hợp lệ, cơ chế tự động khôi phục cấu hình mặc định, điều phối kiểm tra kết nối `pingCamera(id)` (đo độ trễ ms, cập nhật trạng thái `ONLINE`/`ERROR`, ghi nhận vào `CameraHealthLog`), ném lỗi `AppError` và `ERROR_CODE`.
+    - `camera.controller.ts`: Xử lý HTTP request/response, format dữ liệu chuẩn `{ success: true, data: ..., meta: ... }`, chuyển lỗi sang `next(error)`.
+    - `camera.route.ts`: Bảo vệ 100% bằng dynamic RBAC permissions (`PPE_CAMERA_READ`, `PPE_CAMERA_MANAGE`), không hardcode role.
+    - `camera.openapi.ts`: Đăng ký tài liệu OpenAPI 3.0 với `openapiRegistry` và Swagger UI (`/api/docs`).
+  - **2. Standalone Microservice & API Gateway Compatibility**:
+    - `src/camera.app.ts`: Express application độc lập cho Camera Service (:8892) tích hợp Helmet, CORS, Morgan, Request ID, Rate Limiting, Maintenance guard, và Health checks (`/health`, `/api/v1/cameras/health`, `/cameras/health`).
+    - `src/camera.server.ts`: HTTP listener trên cổng 8892 (`CAMERA_PORT`) kèm graceful shutdown an toàn ngắt kết nối `cameraPrisma`.
+    - `package.json`: Bổ sung scripts `dev:camera` và `start:camera`.
+    - Khớp 100% với định tuyến Traefik API Gateway (`traefik/dynamic.yml`) router `cameras` (chuyển tiếp `/api/v1/cameras`, `/api/v1/camera-streams`).
+  - **3. Dual-Mounting Monolith**:
+    - Tích hợp vào Monolith API router tại `src/routes/index.ts` dưới `/cameras` và `/camera-streams`.
+  - **4. Automated Verification**:
+    - Bộ test tự động chuyên dụng `tests/camera-service.test.ts` (17/17 test cases PASS 100%).
+    - Bộ test hồi quy `tests/ppe-auth-rbac-be03.test.ts` (12/12 test cases PASS 100%) và `tests/site-service.test.ts` (20/20 test cases PASS 100%). Tổng cộng 49/49 test cases PASS 100%.
+    - `pnpm exec prisma validate --schema=prisma/camera/schema.prisma`: Schema hợp lệ 100%.
+    - `pnpm build`: TypeScript compile 0 lỗi (Strict Mode).
+    - `pnpm run lint`: ESLint 0 errors / 0 warnings.
+  - **5. Open Code Review Hardening (2026-10-09)**:
+    - Bổ sung `sortOrder: z.enum(["asc", "desc"]).optional()` vào `cameraHealthLogQuerySchema` chống nuốt tham số query logs.
+    - Bổ sung xác thực regex giao thức `^(rtsp|rtsps|http|https|hls|ws|wss):\/\/.+` cho `streamUrl` trong `createCameraSchema` và `createCameraStreamSchema`.
+    - Cho phép `location` và `description` nhận `null` trong `createCameraSchema` và `updateCameraSchema` để client có thể chủ động gỡ bỏ/xóa trắng mô tả hoặc vị trí.
+    - Sửa lỗi gán enum `sourceType` (nhận `HTTP`/`FILE`) vào `protocol` (chỉ nhận `RTSP`/`HLS`/`WEBRTC`) khi tạo stream mặc định trong `camera.repository.ts`.
+    - Tự động đồng bộ cập nhật URL stream mặc định của camera khi `streamUrl` được sửa qua `updateCamera`.
+    - Bổ sung logic giữ nguyên trạng thái `MAINTENANCE` cho camera khi thực thi `pingCamera`.
+    - Cung cấp hàm bảo mật `maskStreamCredentials(url)` che giấu thông tin mật khẩu nhúng trong RTSP stream URL (`rtsp://user:***@host...`).
+    - Mount endpoint `POST /api/v1/camera-streams` với `createCameraStreamDirectSchema` trong `cameraStreamRouter` và đăng ký OpenAPI 3.0.
+    - Tái sử dụng kiểu phân trang chuẩn tập trung `PaginationMeta` và `PaginatedResult` từ `src/common/types/pagination.type.ts`.
+    - Dọn dẹp ép kiểu `(envConfig as any)` tại `camera.server.ts` và chuẩn hóa `result.data` tại controller.
+    - Mở rộng bộ test `tests/camera-service.test.ts` lên 22/22 test cases PASS 100% (toàn bộ 54/54 PPE tests pass 100%, build và lint sạch 0 lỗi).

@@ -1,6 +1,6 @@
 # CẨM NANG TOÀN DIỆN: CHIẾN LƯỢC BẢO VỆ ĐỒ ÁN TỐT NGHIỆP
 ## Đề tài: Hệ thống Giám sát An toàn Lao động Thông minh (Smart PPE Monitoring System)
-### Kiến trúc: Microservices & Event-Driven Architecture (Chuẩn Tài liệu D08 & Tasks BE-03, BE-04)
+### Kiến trúc: Microservices & Event-Driven Architecture (Chuẩn Tài liệu D08 & Tasks BE-03, BE-04, BE-05)
 
 ---
 
@@ -163,7 +163,7 @@
 
 ---
 
-## 🔥 4. CHUYÊN ĐỀ MỚI: 6 CÂU HỎI VẤN ĐÁP TRỰC TIẾP TỪ CÁC FILE VỪA TRIỂN KHAI (TASK BE-03 & BE-04)
+## 🔥 4. CHUYÊN ĐỀ SÂU: 6 CÂU HỎI VẤN ĐÁP TỪ MODULE SITE MANAGEMENT (TASK BE-03 & BE-04)
 
 ### 🔹 Câu 17 (Task BE-04: `site.service.ts`): Cấu trúc phân cấp & Tự động hóa Safety Config
 * **Câu hỏi**: *"Tại sao khi tạo Site mới, hệ thống tự động khởi tạo luôn `SiteSafetyConfig` mặc định? Khi tạo `RestrictedArea`, làm sao ngăn người dùng gán nhầm `zoneId` của công trường khác?"*
@@ -219,16 +219,66 @@
 
 ---
 
-## 🛠️ 5. CHECKLIST CHUẨN BỊ TRƯỚC GIỜ BẢO VỆ
+## 📹 5. CHUYÊN ĐỀ SÂU: 5 CÂU HỎI VẤN ĐÁP TỪ MODULE CAMERA MANAGEMENT (TASK BE-05)
+
+### 🔹 Câu 23 (Task BE-05: `camera.service.ts`): Bảo mật thông tin xác thực luồng RTSP (Credential Masking)
+* **Câu hỏi**: *"Tại sao luồng RTSP camera công trường lại hay chứa user/password trong URL? Hàm `maskStreamCredentials` giải quyết lỗ hổng bảo mật gì?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô: Các camera IP công trường thường xác thực qua chuẩn Basic Auth nhúng trực tiếp trong URI `rtsp://<username>:<password>@<ip>:<port>/<path>`. Nếu lưu và trả về nguyên trạng qua API GET hoặc ghi ra log hệ thống, mật khẩu camera sẽ bị lộ qua HTTP Response (CWE-200 / CWE-532). Hàm `maskStreamCredentials` sử dụng Regex để che giấu mật khẩu thành `rtsp://<user>:***@<ip>...` khi phản hồi ra bên ngoài hoặc ghi log, bảo vệ an toàn cho thiết bị camera trước nguy cơ bị chiếm quyền điều khiển."*
+
+---
+
+### 🔹 Câu 24 (Task BE-05: `camera.repository.ts` & `camera.service.ts`): Transaction nguyên tử & Giám sát bảo trì
+* **Câu hỏi**: *"Tại sao em dùng `$transaction` khi tạo Camera? Trong hàm `pingCamera`, tại sao lại cố tình giữ nguyên trạng thái `MAINTENANCE` nếu camera đang bảo trì thay vì chuyển sang `ONLINE`?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô:  
+  > 1) **Tính nguyên tử (Atomicity)**: Một camera muốn AI xử lý được thì bắt buộc phải có đồng thời cấu hình phân tích (`CameraConfig`) và luồng truyền tải (`CameraStream`). Việc bọc `$transaction` đảm bảo nguyên tắc 'All or Nothing': nếu tạo luồng stream thất bại, database sẽ rollback toàn bộ, không để lại bản ghi camera mồ côi (Orphan Record) trong CSDL.  
+  > 2) **Bảo toàn nghiệp vụ Bảo trì**: Khi kỹ thuật viên chủ động đặt camera vào chế độ `MAINTENANCE` để sửa chữa phần cứng/góc quay, camera đó không được phép tham gia vào luồng giám sát phạt vi phạm. Nếu probe tự ý đổi về `ONLINE`, AI sẽ tiếp tục phát hiện và tạo vi phạm sai trong lúc kỹ thuật viên đang thử nghiệm."*
+
+---
+
+### 🔹 Câu 25 (Task BE-05: `camera.validation.ts`): Giới hạn FPS AI và Kiểm thực giao thức Stream
+* **Câu hỏi**: *"Tại sao pipeline AI giám sát PPE lại chọn capture 10 FPS thay vì 30 FPS của camera? Việc kiểm thực `STREAM_URL_REGEX` ở biên HTTP mang lại lợi ích gì?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô:  
+  > 1) **Tối ưu tải GPU & Chống nghẽn**: Tốc độ di chuyển của công nhân trên công trường chỉ khoảng 1 - 1.5 m/s. Việc AI xử lý ở 10 FPS (100ms/frame) là hoàn toàn đủ để phát hiện vi phạm và tracking liên tục (kết hợp confirmation window 2s = 20 frames), trong khi giúp giảm tải tính toán GPU và băng thông mạng tới 60-70% so với 30 FPS, cho phép 1 GPU phục vụ đồng thời nhiều camera hơn.  
+  > 2) **Phòng vệ biên HTTP**: `STREAM_URL_REGEX` ngăn chặn việc truyền các scheme độc hại như `file:///etc/passwd`, `javascript:`, `ftp:` hoặc chuỗi rác, phòng chống lỗ hổng SSRF / Path Traversal và ngăn chặn AI Ingestion Worker (OpenCV/FFmpeg) bị crash do giao thức không được hỗ trợ."*
+
+---
+
+### 🔹 Câu 26 (Tài liệu `README.md` mới): Quy trình Onboarding & Tính nhất quán Kiến trúc
+* **Câu hỏi**: *"Khi một kỹ sư mới tiếp nhận dự án, họ mất bao lâu và cần những bước nào để chạy được hệ thống? Em duy trì tính đồng bộ giữa `README.md`, Docker/Traefik và code thế nào?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô:  
+  > 1) **Quy trình Onboarding 3 bước (< 5 phút)**: Một kỹ sư mới chỉ cần: a) `pnpm install` cài dependencies; b) `docker compose -f docker-compose.infra.yml up -d` để dựng 6 logical DBs, Kafka, MinIO; c) `pnpm run prisma:generate:all && pnpm run db:seed` để nạp toàn bộ schemas và tài khoản mẫu. Sau đó chạy ngay `pnpm dev`.  
+  > 2) **Đồng bộ nhất quán (Single Source of Truth)**: Toàn bộ cổng dịch vụ (:8888, :8891, :8892, :8893, :8894) đều được tập trung hóa qua biến môi trường chuẩn trong `.env.example` và ánh xạ 1:1 sang cấu hình Traefik Dynamic Router và Docker Compose; tài liệu Swagger UI được sinh tự động 100% từ Zod schema nên không bao giờ xảy ra tình trạng tài liệu bị lệch pha (Out-of-sync) với mã nguồn."*
+
+---
+
+### 🔹 Câu 27 (Live Demo Camera Service & Traefik Routing): Trình diễn thực tế Module Camera
+* **Câu hỏi**: *"Em chọn những API nào để demo toàn bộ vòng đời của camera? Làm sao chứng minh trực quan request đang được Traefik API Gateway định tuyến chính xác vào Camera Microservice (:8892)?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô:  
+  > 1) **Kịch bản Live Demo Camera Service 4 bước**:  
+  >    - Gọi `POST /api/v1/cameras` tạo camera kèm RTSP URL; chứng minh response tự động sinh cả `config` (10 FPS) và `streams` trong 1 transaction.  
+  >    - Gọi `POST /api/v1/cameras/:id/ping` để kích hoạt health probe stream, đo độ trễ latency thực tế và ghi nhật ký.  
+  >    - Gọi `GET /api/v1/cameras/:id/health-logs` xem bảng audit trail sức khỏe camera theo thời gian.  
+  >    - Gọi `PUT /api/v1/cameras/:id` đổi trạng thái sang `MAINTENANCE` và ping lại để chứng minh trạng thái bảo trì được bảo toàn nguyên vẹn.  
+  > 2) **Minh chứng qua Traefik Gateway**: Mở Traefik Dashboard (:8080) chỉ rõ router `cameras` đang active với priority 100 trỏ tới service `:8892`; đồng thời trên response headers chỉ ra sự hiện diện của `X-Gateway: Traefik-v3` và `X-Request-Id: UUIDv7` do Gateway tự động inject."*
+
+---
+
+## 🛠️ 6. CHECKLIST CHUẨN BỊ TRƯỚC GIỜ BẢO VỆ
 
 - [ ] **Môi trường máy tính**:
   - Đã nạp sẵn Docker images (`postgres:16-alpine`, `confluentinc/cp-kafka:7.5.0`, `provectuslabs/kafka-ui`, `minio/minio`).
-  - Kiểm tra các cổng không bị xung đột: Postgres (5433), Kafka (9092), Kafka UI (8088), MinIO (9000 / 9001), API Gateway Traefik (80/443), Monolith App API (9999), Site Service (8891).
+  - Kiểm tra các cổng không bị xung đột: Postgres (5433), Kafka (9092), Kafka UI (8088), MinIO (9000 / 9001), API Gateway Traefik (80/443), Monolith App API (9999), Site Service (8891), Camera Service (8892).
 - [ ] **Tài liệu & Trình duyệt chuẩn bị sẵn các tab**:
   - Tab 1: Slide thuyết trình (Canva / PowerPoint).
   - Tab 2: Swagger UI (`http://localhost:8888/api/docs` hoặc cổng `app-api` :9999).
   - Tab 3: Kafka UI (`http://localhost:8088` - sẵn sàng ở topic `ppe.violation.detected`).
   - Tab 4: MinIO Console (`http://localhost:9001` - bucket `ppe-evidence`).
+  - Tab 5: Traefik Dashboard (`http://localhost:8080` - routers & services status).
 - [ ] **Terminal chuẩn bị sẵn**:
   - Cửa sổ 1: Đang chạy `docker compose -f docker-compose.infra.yml ps`.
   - Cửa sổ 2: Thư mục dự án sẵn sàng gõ `pnpm test`.
