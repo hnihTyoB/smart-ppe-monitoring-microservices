@@ -953,9 +953,35 @@
       - Bổ sung `searchFts(query: IncidentQueryDto)`: Sử dụng `Prisma.sql` parameterized raw query tra cứu qua GIN index, tính toán điểm độ phù hợp `ts_rank`. Hỗ trợ linh hoạt tiêu chí sắp xếp tùy chỉnh (`sortBy`, `sortOrder`) kết hợp `rank DESC`, mặc định `ORDER BY rank DESC, i.detected_at DESC`.
       - Kết hợp phân trang chuẩn và truy vấn 2 giai đoạn (ID-based hydration) bảo đảm tải đầy đủ quan hệ `evidences` (take 1 kèm metadata) và `_count` (`evidences`, `comments`, `assignments`), đồng thời bảo toàn định dạng `serializeIncident`.
       - Chuẩn hóa kiểu dữ liệu trả về `PaginatedResultDto<IncidentItemDto>`, loại bỏ `any` trong serializers và repository mapping.
-      - Tái sử dụng an toàn helper `buildTsQuery(search, "prefix")` từ `src/common/helpers/fts.helper.ts`.
-    - `IncidentController`: Sử dụng Express Request generics `Request<unknown, unknown, unknown, IncidentQueryDto>` và `Request<unknown, unknown, unknown, EvidenceQueryDto>`, loại bỏ hoàn toàn ép kiểu kép `as unknown as`.
-    - `IncidentService.getAllIncidents`: Tự động rẽ nhánh gọi `repository.searchFts` khi có `query.search?.trim()`, fallback về `findAllIncidents` khi không có từ khóa tìm kiếm.
-    - Test Suite: Mở rộng `tests/incident-service.test.ts` (lên 30 test cases) và `tests/full-text-search.test.ts` (lên 27 test cases), toàn bộ test suites đều PASS 100%.
-    - Verification: `pnpm exec prisma validate --schema=prisma/incident/schema.prisma`, `pnpm run lint` và `pnpm build` biên dịch TypeScript Strict Mode thành công 100% không lỗi.
-
+- **PPE Microservices: Task BE-07 - Media/Evidence Storage Service (2026-10-10)**:
+  - **Mục tiêu**: Hoàn thiện toàn diện module Media & Evidence Storage Service theo phân công đồ án PPE Microservices (`BE-07`), tài liệu kiến trúc kỹ thuật `D08.pdf` (Mục 1 & 2.1), và hạ tầng lưu trữ đối tượng MinIO S3 (`ppe-evidences`).
+  - **1. S3-Compatible Storage Abstraction**:
+    - `src/common/services/evidence-storage.service.ts`: Xây dựng `EvidenceStorageService` trừu tượng hóa kho lưu trữ tệp đối tượng tương thích chuẩn AWS S3 SDK v3 (`@aws-sdk/client-s3`, `@aws-sdk/s3-request-presigner`).
+    - Hỗ trợ linh hoạt cả **MinIO cục bộ** (port 9000, `forcePathStyle: true`, bucket `ppe-evidences`) và **Cloudflare R2 / AWS S3** khi triển khai Production trên điện toán đám mây.
+    - Cấu trúc khóa lưu trữ phân cấp chuẩn hóa theo thời gian và danh mục thực thể: `evidences/{siteId}/{cameraId}/{YYYY}/{MM}/{DD}/{incidentId}/{evidenceType}_{timestamp}_{uuid}.{ext}` nhằm tránh xung đột tên tệp và tối ưu partition theo ngày.
+    - Hàm băm mật mã toàn vẹn SHA-256 (`calculateSha256`), hỗ trợ đối chiếu an toàn chống tấn công định thời (`crypto.timingSafeEqual`).
+  - **2. Luồng nghiệp vụ Storage & State Machine Protection**:
+    - **Presigned Upload PUT URL**: Client hoặc AI Vision pipeline yêu cầu URL có chữ ký có hạn định (mặc định 15 phút) để tải trực tiếp lên MinIO/S3 mà không làm nghẽn băng thông của backend API Gateway. Tự động kiểm tra trạng thái sự cố: cấm tuyệt đối tải thêm bằng chứng cho sự cố đã đóng (`CLOSED`).
+    - **Direct Multipart Upload**: Hỗ trợ tiếp nhận tệp tải lên trực tiếp (`uploadImageMiddleware` via multer), trích xuất metadata hình ảnh (width, height bằng Sharp), tính toán mã băm SHA-256 thực tế của buffer, đẩy lên MinIO và tự động lưu bản ghi `Evidence` + `EvidenceMetadata` vào CSDL `ppe_incident_db`.
+    - **Presigned Download/View GET URL**: Sinh URL có hạn định (15m - 24h) phục vụ xem hoặc tải bằng chứng số, đồng thời tự động ghi nhận nhật ký kiểm toán không thể chối bỏ vào bảng `EvidenceAccessLog` (`VIEW` hoặc `DOWNLOAD`, `userId`, `accessedAt`) theo đúng yêu cầu bảo mật số pháp lý của `D08.pdf`.
+    - **Tamper Evidence Verification (Mục 1 & 2.1 D08.pdf)**: Cung cấp API xác thực tính toàn vẹn pháp lý đối chiếu mã băm SHA-256 thực tế của tệp lưu trên MinIO với giá trị `EvidenceMetadata.checksum` lưu trữ trong CSDL, trả về cờ `isValid` chuẩn xác.
+    - **Physical Storage Cleanup**: Khi xóa bản ghi `Evidence` qua `deleteEvidence`, hệ thống tự động xóa đối tượng vật lý tương ứng trên MinIO qua `storage.deleteObject` để giải phóng dung lượng đĩa.
+  - **3. Kiến trúc phân tầng & Validation**:
+    - `src/config/env.config.ts`: Mở rộng cấu hình MinIO (`PPE_MINIO_ENDPOINT`, `PPE_MINIO_ROOT_USER`, `PPE_MINIO_ROOT_PASSWORD`, `PPE_MINIO_BUCKET_EVIDENCES`, `PPE_MINIO_FORCE_PATH_STYLE`).
+    - `evidence-storage.dto.ts`: Định nghĩa toàn bộ interfaces DTO cho Upload URL request/response, Direct upload, Download URL request/response, Checksum verification.
+    - `evidence-storage.validation.ts`: Zod validation schemas chặt chẽ ở biên HTTP: chặn path traversal (`..`), giới hạn danh sách MIME types an toàn (`ALLOWED_EVIDENCE_MIME_TYPES`), chặn file rỗng hoặc kích thước vượt quá 500MB, áp dụng default và phạm vi thời gian hết hạn hợp lệ $[60, 86400]$ giây.
+    - `incident.route.ts`: Mount các endpoints storage trên `evidenceRouter` (`POST /upload-url`, `POST /direct-upload`, `GET /:id/download-url`, `GET /:id/verify-checksum`), bảo vệ 100% bằng dynamic RBAC permissions (`PPE_INCIDENT_READ`, `PPE_INCIDENT_UPDATE`, `PPE_INCIDENT_DELETE`).
+    - `incident.openapi.ts`: Đăng ký tài liệu OpenAPI 3.0 với đầy đủ schemas và path definitions cho Swagger UI (`/api/docs`).
+  - **4. Automated Verification**:
+    - Bộ test tự động chuyên dụng `tests/evidence-storage-service.test.ts` (23/23 test cases PASS 100%).
+    - Kết hợp cùng bộ test `tests/incident-service.test.ts` (30/30 test cases PASS 100%). Tổng cộng 53/53 test cases liên quan đến Incident & Evidence đều PASS 100%.
+    - `pnpm build`: TypeScript compile 0 lỗi (Strict Mode).
+  - **5. Open Code Review & Architectural Hardening (2026-10-10)**:
+    - **Double Logging Elimination**: Tách biệt luồng truy vấn `getEvidenceById` trong `getEvidenceDownloadUrl`, triệt tiêu hoàn toàn lỗi chèn 2 bản ghi log trùng lặp (`VIEW` và `DOWNLOAD`) cho 1 request tải tệp.
+    - **Query Parameter & Action Mapping**: Cập nhật `IncidentController.getEvidenceDownloadUrl` phân tích đúng `req.query.expiresInSeconds` và `req.query.action` (`VIEW` vs `DOWNLOAD`). Thiết lập header `Content-Disposition` tương ứng (`inline` cho `VIEW`, `attachment` cho `DOWNLOAD`) và ghi đúng loại access log.
+    - **Multipart aiDetections Preprocessing**: Bổ sung `z.preprocess` an toàn cho trường `aiDetections` trong `directUploadEvidenceSchema`, tự động parse JSON string thành Object khi gửi qua `multipart/form-data`.
+    - **HTTP Boundary File Validation**: Bổ sung kiểm tra bắt buộc `req.file` ở mức Controller trước khi gọi Service, xóa bỏ hoàn toàn ép kiểu `as any`.
+    - **OpenAPI Schema Synchronization**: Đồng bộ hóa 100% tài liệu Swagger UI OpenAPI trong `incident.openapi.ts` với DTO runtime (`storageKey`, `downloadUrl`, `isValid`, `fileName`, `mimeType`).
+    - **Memory-Safe Streaming Checksum**: Tối ưu hóa `EvidenceStorageService.verifyChecksum` sử dụng trực tiếp luồng Readable Stream từ S3 pipe vào `crypto.createHash('sha256')`, giữ mức tiêu thụ RAM không đổi $O(1)$ thay vì buffer toàn bộ tệp vào bộ nhớ.
+    - **Storage Key Site Integrity**: Ưu tiên sử dụng `incident.siteId` từ CSDL khi sinh khóa `storageKey` trong `requestEvidenceUploadUrl`, hỗ trợ `expiresInSeconds` tùy chỉnh từ client.
+    - **Atomic Cleanup Sequence**: Điều chỉnh thứ tự trong `deleteEvidence` thực hiện xóa bản ghi CSDL trước, sau đó mới dọn dẹp đối tượng vật lý trên Object Storage.

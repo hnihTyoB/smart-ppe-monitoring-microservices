@@ -13,6 +13,11 @@ import {
   evidenceIdParamSchema,
   evidenceQuerySchema,
 } from "./incident.validation";
+import {
+  requestEvidenceUploadUrlSchema,
+  directUploadEvidenceSchema,
+  downloadUrlQuerySchema,
+} from "./evidence-storage.validation";
 import { z } from "zod";
 
 export function registerIncidentOpenApi(): void {
@@ -24,6 +29,8 @@ export function registerIncidentOpenApi(): void {
   openapiRegistry.register("CreateIncidentAssignmentRequest", createIncidentAssignmentSchema);
   openapiRegistry.register("CreateIncidentCommentRequest", createIncidentCommentSchema);
   openapiRegistry.register("CreateEvidenceRequest", createEvidenceSchema);
+  openapiRegistry.register("RequestEvidenceUploadUrlRequest", requestEvidenceUploadUrlSchema);
+  openapiRegistry.register("DirectUploadEvidenceRequest", directUploadEvidenceSchema);
 
   // ── Incidents ──────────────────────────────────────────────────────────────
   openapiRegistry.registerPath({
@@ -441,6 +448,126 @@ export function registerIncidentOpenApi(): void {
             schema: z.object({
               success: z.boolean(),
               data: z.any(),
+            }),
+          },
+        },
+      },
+    },
+  });
+
+  openapiRegistry.registerPath({
+    method: "post",
+    path: "/evidences/upload-url",
+    tags: ["Evidences"],
+    summary: "Yêu cầu Presigned Upload URL có hạn định để tải trực tiếp lên MinIO/S3",
+    security: [{ BearerAuth: [] }],
+    request: {
+      body: {
+        content: {
+          "application/json": { schema: requestEvidenceUploadUrlSchema },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description: "Sinh Presigned Upload URL thành công",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                uploadUrl: z.string(),
+                storageKey: z.string(),
+                expiresInSeconds: z.number(),
+              }),
+            }),
+          },
+        },
+      },
+    },
+  });
+
+  openapiRegistry.registerPath({
+    method: "post",
+    path: "/evidences/direct-upload",
+    tags: ["Evidences"],
+    summary: "Tải lên tệp bằng chứng số trực tiếp dạng multipart/form-data vào MinIO",
+    security: [{ BearerAuth: [] }],
+    request: {
+      body: {
+        content: {
+          "multipart/form-data": { schema: directUploadEvidenceSchema },
+        },
+      },
+    },
+    responses: {
+      201: {
+        description: "Tải lên bằng chứng và lưu CSDL thành công",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.any(),
+            }),
+          },
+        },
+      },
+    },
+  });
+
+  openapiRegistry.registerPath({
+    method: "get",
+    path: "/evidences/{id}/download-url",
+    tags: ["Evidences"],
+    summary: "Lấy Presigned URL xem hoặc tải bằng chứng số có hạn định (kèm ghi log truy vết)",
+    security: [{ BearerAuth: [] }],
+    request: {
+      params: evidenceIdParamSchema,
+      query: downloadUrlQuerySchema,
+    },
+    responses: {
+      200: {
+        description: "Sinh Presigned Download URL thành công",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                downloadUrl: z.string(),
+                expiresInSeconds: z.number(),
+                fileName: z.string(),
+                mimeType: z.string(),
+              }),
+            }),
+          },
+        },
+      },
+    },
+  });
+
+  openapiRegistry.registerPath({
+    method: "get",
+    path: "/evidences/{id}/verify-checksum",
+    tags: ["Evidences"],
+    summary: "Kiểm tra toàn vẹn và chống giả mạo bằng chứng số (Tamper Evidence Verification)",
+    security: [{ BearerAuth: [] }],
+    request: {
+      params: evidenceIdParamSchema,
+    },
+    responses: {
+      200: {
+        description: "Kiểm tra checksum thành công",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                evidenceId: z.string(),
+                expectedChecksum: z.string(),
+                actualChecksum: z.string(),
+                isValid: z.boolean(),
+                verifiedAt: z.string(),
+              }),
             }),
           },
         },

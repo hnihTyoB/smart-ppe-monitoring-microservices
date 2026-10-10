@@ -2,6 +2,11 @@ import {
   IncidentRepository,
   incidentRepository,
 } from "./incident.repository";
+import {
+  EvidenceStorageService,
+  evidenceStorageService,
+} from "../../common/services/evidence-storage.service";
+import { imageProcessingService } from "../../common/services/image-processing.service";
 import { AppError } from "../../common/errors/app-error";
 import { ERROR_CODE } from "../../common/errors/error-code";
 import {
@@ -17,15 +22,28 @@ import {
   EvidenceQueryDto,
 } from "./incident.dto";
 import {
+  RequestEvidenceUploadUrlDto,
+  DirectUploadEvidenceDto,
+  EvidenceUploadUrlResponseDto,
+  EvidenceDownloadUrlResponseDto,
+  VerifyEvidenceChecksumResponseDto,
+} from "./evidence-storage.dto";
+import {
   INCIDENT_STATUS,
   EVIDENCE_ACCESS_ACTION,
+  EvidenceAccessAction,
 } from "../../common/constants/incident.constant";
 
 export class IncidentService {
   private readonly repository: IncidentRepository;
+  private readonly storage: EvidenceStorageService;
 
-  constructor(repository?: IncidentRepository) {
+  constructor(
+    repository?: IncidentRepository,
+    storage?: EvidenceStorageService,
+  ) {
     this.repository = repository || incidentRepository;
+    this.storage = storage || evidenceStorageService;
   }
 
   // ── Incident CRUD Operations ───────────────────────────────────────────────
@@ -235,8 +253,209 @@ export class IncidentService {
   }
 
   async deleteEvidence(id: string) {
-    await this.getEvidenceById(id);
-    return this.repository.deleteEvidence(id);
+    const evidence = await this.getEvidenceById(id);
+    const deleted = await this.repository.deleteEvidence(id);
+    if (evidence.storageKey) {
+      await this.storage.deleteObject(evidence.storageKey);
+    }
+    return deleted;
+  }
+
+  // ── Evidence Storage Abstraction Operations (BE-07) ────────────────────────
+  /**
+   * Sinh Presigned Upload PUT URL để AI Vision / Client tải trực tiếp tệp lên Object Storage (MinIO/S3)
+   */
+  async requestEvidenceUploadUrl(
+    dto: RequestEvidenceUploadUrlDto,
+    _actorId: string,
+  ): Promise<EvidenceUploadUrlResponseDto> {
+    const incident = await this.getIncidentById(dto.incidentId);
+
+    if (incident.status === INCIDENT_STATUS.CLOSED) {
+      throw new AppError(
+        "Không thể tải lên bằng chứng cho sự cố đã đóng",
+        400,
+        ERROR_CODE.BAD_REQUEST,
+      );
+    }
+
+    // Luôn ưu tiên siteId chính xác từ sự cố trong CSDL
+    const storageKey = this.storage.generateStorageKey({
+      siteId: incident.siteId || dto.siteId || "",
+      cameraId: dto.cameraId,
+      incidentId: dto.incidentId,
+      evidenceType: dto.evidenceType,
+      originalFileName: dto.fileName,
+    });
+
+    const expiresInSeconds = dto.expiresInSeconds || 900; // Mặc định 15 phút
+    const uploadUrl = await this.storage.getPresignedUploadUrl(
+      storageKey,
+      dto.mimeType,
+      expiresInSeconds,
+    );
+
+    return {
+      uploadUrl,
+      storageKey,
+      expiresInSeconds,
+    };
+  }
+
+  /**
+   * Tải tệp trực tiếp (Direct Multipart Upload), tự động trích xuất metadata và tính toán SHA-256 Checksum
+   */
+  async uploadEvidenceDirect(
+    dto: DirectUploadEvidenceDto,
+    file: {
+      buffer: Buffer;
+      originalname: string;
+      mimetype: string;
+      size: number;
+    },
+    _actorId: string,
+  ) {
+    if (!file || !file.buffer || file.buffer.length === 0) {
+      throw new AppError(
+        "Tệp tải lên không hợp lệ hoặc dữ liệu rỗng",
+        400,
+        ERROR_CODE.VALIDATION_ERROR,
+      );
+    }
+
+    const incident = await this.getIncidentById(dto.incidentId);
+    if (incident.status === INCIDENT_STATUS.CLOSED) {
+      throw new AppError(
+        "Không thể đính kèm bằng chứng vào sự cố đã đóng",
+        400,
+        ERROR_CODE.BAD_REQUEST,
+      );
+    }
+
+    const storageKey = this.storage.generateStorageKey({
+      siteId: incident.siteId,
+      cameraId: dto.cameraId,
+      incidentId: dto.incidentId,
+      evidenceType: dto.evidenceType,
+      originalFileName: file.originalname,
+    });
+
+    // 1. Đẩy buffer lên Object Storage (MinIO / S3) và tính SHA-256
+    const uploadResult = await this.storage.uploadBuffer(
+      storageKey,
+      file.buffer,
+      file.mimetype,
+    );
+
+    // 2. Trích xuất metadata hình ảnh bằng Sharp nếu là tệp ảnh
+    let width: number | null = null;
+    let height: number | null = null;
+    if (file.mimetype.toLowerCase().startsWith("image/")) {
+      try {
+        const { metadata } = await imageProcessingService.validateImageBuffer(
+          file.buffer,
+        );
+        width = metadata.width ?? null;
+        height = metadata.height ?? null;
+      } catch {
+        // Bỏ qua nếu là định dạng ảnh đặc biệt không hỗ trợ đo đạc kích thước
+      }
+    }
+
+    // 3. Lưu bản ghi bằng chứng vào CSDL ppe_incident_db
+    return this.repository.createEvidence({
+      incidentId: dto.incidentId,
+      cameraId: dto.cameraId,
+      evidenceType: dto.evidenceType,
+      storageKey,
+      fileName: file.originalname,
+      mimeType: file.mimetype,
+      fileSize: uploadResult.fileSize,
+      capturedAt: dto.capturedAt || new Date(),
+      metadata: {
+        width,
+        height,
+        checksum: uploadResult.checksum,
+        aiDetections: dto.aiDetections ?? undefined,
+      },
+    });
+  }
+
+  /**
+   * Sinh Presigned GET URL để tải hoặc xem tệp bằng chứng an toàn có hạn định,
+   * đồng thời tự động ghi nhận nhật ký truy vết vào EvidenceAccessLog (Mục 1 & 2.1 D08.pdf)
+   */
+  async getEvidenceDownloadUrl(
+    evidenceId: string,
+    actorId?: string,
+    expiresInSeconds: number = 3600,
+    action: EvidenceAccessAction = EVIDENCE_ACCESS_ACTION.DOWNLOAD,
+  ): Promise<EvidenceDownloadUrlResponseDto> {
+    // 1. Chỉ tìm bằng chứng, không truyền actorId vào getEvidenceById để tránh ghi log VIEW kép
+    const evidence = await this.getEvidenceById(evidenceId);
+
+    // 2. Sinh presigned URL với content-disposition tương ứng (inline vs attachment)
+    const downloadUrl = await this.storage.getPresignedDownloadUrl(
+      evidence.storageKey,
+      expiresInSeconds,
+      evidence.fileName,
+      action,
+    );
+
+    // 3. Ghi nhận log truy vết theo đúng action thực tế được yêu cầu
+    if (actorId) {
+      this.repository
+        .logEvidenceAccess({
+          evidenceId,
+          userId: actorId,
+          action,
+        })
+        .catch((err) => {
+          console.warn(
+            "[EvidenceStorage] Không thể ghi log truy vết bằng chứng:",
+            err?.message || err,
+          );
+        });
+    }
+
+    return {
+      downloadUrl,
+      expiresInSeconds,
+      fileName: evidence.fileName,
+      mimeType: evidence.mimeType,
+    };
+  }
+
+  /**
+   * Kiểm tra tính toàn vẹn pháp lý (Tamper Evidence Checksum Verification)
+   * Tải tệp từ MinIO/S3 và đối chiếu mã băm SHA-256 với giá trị lưu trong CSDL
+   */
+  async verifyEvidenceIntegrity(
+    evidenceId: string,
+  ): Promise<VerifyEvidenceChecksumResponseDto> {
+    const evidence = await this.getEvidenceById(evidenceId);
+    const expectedChecksum = evidence.metadata?.checksum;
+
+    if (!expectedChecksum) {
+      throw new AppError(
+        "Bằng chứng này chưa có mã băm toàn vẹn (checksum) được ghi nhận trong CSDL",
+        400,
+        ERROR_CODE.VALIDATION_ERROR,
+      );
+    }
+
+    const verifyResult = await this.storage.verifyChecksum(
+      evidence.storageKey,
+      expectedChecksum,
+    );
+
+    return {
+      evidenceId,
+      expectedChecksum,
+      actualChecksum: verifyResult.actualChecksum,
+      isValid: verifyResult.isValid,
+      verifiedAt: new Date().toISOString(),
+    };
   }
 }
 

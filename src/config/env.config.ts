@@ -91,6 +91,13 @@ const envSchema = z
       .default(300),
     R2_AVATAR_MAX_FILE_SIZE_MB: z.coerce.number().positive().default(5),
 
+    // ── MinIO / PPE Evidence Object Storage (BE-07) ──────────────────────────
+    PPE_MINIO_ENDPOINT: z.string().default("http://localhost:9000"),
+    PPE_MINIO_ROOT_USER: z.string().default("minio_admin"),
+    PPE_MINIO_ROOT_PASSWORD: z.string().default("minio_admin_secret"),
+    PPE_MINIO_BUCKET_EVIDENCES: z.string().default("ppe-evidences"),
+    PPE_MINIO_FORCE_PATH_STYLE: z.string().default("true"),
+
     // ── Notification Service & Worker (Phase 5: Satellite Microservice) ──────
     NOTIFICATION_WORKER_ENABLED: z.string().default("true"),
     NOTIFICATION_WORKER_INTERVAL_MS: z.coerce
@@ -430,6 +437,13 @@ export const envConfig = {
     port: _env.INCIDENT_PORT,
     standalone: _env.INCIDENT_SERVICE_STANDALONE === "true",
     serviceUrl: _env.INCIDENT_SERVICE_URL,
+  },
+  minio: {
+    endpoint: _env.PPE_MINIO_ENDPOINT,
+    accessKeyId: _env.PPE_MINIO_ROOT_USER,
+    secretAccessKey: _env.PPE_MINIO_ROOT_PASSWORD,
+    bucketEvidences: _env.PPE_MINIO_BUCKET_EVIDENCES,
+    forcePathStyle: _env.PPE_MINIO_FORCE_PATH_STYLE !== "false",
   },
 
 

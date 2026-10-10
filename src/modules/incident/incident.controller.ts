@@ -12,6 +12,14 @@ import {
   CreateEvidenceDto,
   EvidenceQueryDto,
 } from "./incident.dto";
+import {
+  RequestEvidenceUploadUrlDto,
+  DirectUploadEvidenceDto,
+  DownloadUrlQueryDto,
+} from "./evidence-storage.dto";
+import { EVIDENCE_ACCESS_ACTION } from "../../common/constants/incident.constant";
+import { AppError } from "../../common/errors/app-error";
+import { ERROR_CODE } from "../../common/errors/error-code";
 
 function getActorId(req: Request): string {
   return req.user?.id || "";
@@ -270,6 +278,101 @@ export class IncidentController {
     try {
       const { id } = req.params;
       const result = await this.service.deleteEvidence(id);
+      res.json({
+        success: true,
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  // ── Evidence Storage Operations (BE-07) ────────────────────────────────────
+  requestEvidenceUploadUrl = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) => {
+    try {
+      const actorId = getActorId(req);
+      const body = req.body as RequestEvidenceUploadUrlDto;
+      const result = await this.service.requestEvidenceUploadUrl(body, actorId);
+      res.status(200).json({
+        success: true,
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  uploadEvidenceDirect = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) => {
+    try {
+      if (!req.file) {
+        throw new AppError(
+          "Vui lòng đính kèm tệp tin bằng chứng (file)",
+          400,
+          ERROR_CODE.VALIDATION_ERROR,
+        );
+      }
+      const actorId = getActorId(req);
+      const body = req.body as DirectUploadEvidenceDto;
+      const result = await this.service.uploadEvidenceDirect(
+        body,
+        req.file,
+        actorId,
+      );
+      res.status(201).json({
+        success: true,
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  getEvidenceDownloadUrl = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) => {
+    try {
+      const { id } = req.params;
+      const actorId = req.user?.id;
+      const query = req.query as unknown as DownloadUrlQueryDto;
+      const expiresIn = query.expiresInSeconds
+        ? Number(query.expiresInSeconds)
+        : req.query.expiresIn
+          ? Number(req.query.expiresIn)
+          : 900;
+      const action = query.action || EVIDENCE_ACCESS_ACTION.VIEW;
+      const result = await this.service.getEvidenceDownloadUrl(
+        id,
+        actorId,
+        expiresIn,
+        action,
+      );
+      res.json({
+        success: true,
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  verifyEvidenceIntegrity = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) => {
+    try {
+      const { id } = req.params;
+      const result = await this.service.verifyEvidenceIntegrity(id);
       res.json({
         success: true,
         data: result,

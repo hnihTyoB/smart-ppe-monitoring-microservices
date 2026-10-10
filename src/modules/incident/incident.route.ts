@@ -3,6 +3,7 @@ import { incidentController } from "./incident.controller";
 import { authMiddleware } from "../../middlewares/auth.middleware";
 import { requirePermission } from "../../middlewares/permission.middleware";
 import { validate } from "../../middlewares/validate.middleware";
+import { uploadImageMiddleware } from "../../middlewares/upload.middleware";
 import { PERMISSIONS } from "../../common/constants/permission.constant";
 import {
   incidentIdParamSchema,
@@ -18,6 +19,11 @@ import {
   createEvidenceSchema,
   evidenceQuerySchema,
 } from "./incident.validation";
+import {
+  requestEvidenceUploadUrlSchema,
+  directUploadEvidenceSchema,
+  downloadUrlQuerySchema,
+} from "./evidence-storage.validation";
 
 // ── Incident Routes (/api/v1/incidents) ──────────────────────────────────────
 export const incidentRouter = Router();
@@ -139,6 +145,25 @@ incidentRouter.post(
 // ── Evidence Direct Routes (/api/v1/evidences) ───────────────────────────────
 export const evidenceRouter = Router();
 
+// Presigned Upload URL cho AI pipeline hoặc client
+evidenceRouter.post(
+  "/upload-url",
+  authMiddleware,
+  requirePermission(PERMISSIONS.PPE_INCIDENT_UPDATE),
+  validate(requestEvidenceUploadUrlSchema),
+  incidentController.requestEvidenceUploadUrl,
+);
+
+// Direct Multipart Upload (nhận file buffer, trích xuất metadata và lưu MinIO)
+evidenceRouter.post(
+  "/direct-upload",
+  authMiddleware,
+  requirePermission(PERMISSIONS.PPE_INCIDENT_UPDATE),
+  uploadImageMiddleware.single("file"),
+  validate(directUploadEvidenceSchema),
+  incidentController.uploadEvidenceDirect,
+);
+
 evidenceRouter.get(
   "/",
   authMiddleware,
@@ -153,6 +178,25 @@ evidenceRouter.get(
   requirePermission(PERMISSIONS.PPE_INCIDENT_READ),
   validate(evidenceIdParamSchema, "params"),
   incidentController.findEvidenceById,
+);
+
+// Presigned Download / View URL
+evidenceRouter.get(
+  "/:id/download-url",
+  authMiddleware,
+  requirePermission(PERMISSIONS.PPE_INCIDENT_READ),
+  validate(evidenceIdParamSchema, "params"),
+  validate(downloadUrlQuerySchema, "query"),
+  incidentController.getEvidenceDownloadUrl,
+);
+
+// Xác thực tính toàn vẹn pháp lý (Tamper Evidence Checksum Verification - Mục 1 & 2.1 D08.pdf)
+evidenceRouter.get(
+  "/:id/verify-checksum",
+  authMiddleware,
+  requirePermission(PERMISSIONS.PPE_INCIDENT_READ),
+  validate(evidenceIdParamSchema, "params"),
+  incidentController.verifyEvidenceIntegrity,
 );
 
 evidenceRouter.delete(
