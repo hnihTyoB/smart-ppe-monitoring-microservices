@@ -108,3 +108,40 @@ export interface CreateIncidentAssignmentDto {
 export interface CreateIncidentCommentDto {
   comment: string;
 }
+
+// ── Incident Response Item DTOs ─────────────────────────────────────────────
+export interface IncidentEvidenceItemDto {
+  id: string;
+  incidentId: string;
+  cameraId: string;
+  evidenceType: EvidenceType;
+  storageKey: string;
+  fileName: string;
+  mimeType: string;
+  fileSize: number;
+  capturedAt: Date;
+  createdAt: Date;
+  metadata?: CreateEvidenceMetadataDto | null;
+}
+
+export interface IncidentItemDto {
+  id: string;
+  siteId: string;
+  cameraId: string;
+  violationId?: string | null;
+  violationType: ViolationType;
+  severity: IncidentSeverity;
+  status: IncidentStatus;
+  detectedAt: Date;
+  resolvedAt?: Date | null;
+  description?: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  evidences?: IncidentEvidenceItemDto[];
+  _count?: {
+    evidences: number;
+    comments: number;
+    assignments: number;
+  };
+}
+

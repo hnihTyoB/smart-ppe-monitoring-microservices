@@ -46,6 +46,12 @@ export class IncidentService {
   }
 
   async getAllIncidents(query: IncidentQueryDto) {
+    if (
+      query.search?.trim() &&
+      typeof this.repository.searchFts === "function"
+    ) {
+      return this.repository.searchFts(query);
+    }
     return this.repository.findAllIncidents(query);
   }
 

@@ -57,12 +57,12 @@ export class IncidentController {
   };
 
   findAllIncidents = async (
-    req: Request,
+    req: Request<unknown, unknown, unknown, IncidentQueryDto>,
     res: Response,
     next: NextFunction,
   ) => {
     try {
-      const query = req.query as unknown as IncidentQueryDto;
+      const query = req.query;
       const result = await this.service.getAllIncidents(query);
       res.json({
         success: true,
@@ -249,12 +249,12 @@ export class IncidentController {
   };
 
   findAllEvidences = async (
-    req: Request,
+    req: Request<unknown, unknown, unknown, EvidenceQueryDto>,
     res: Response,
     next: NextFunction,
   ) => {
     try {
-      const query = req.query as unknown as EvidenceQueryDto;
+      const query = req.query;
       const result = await this.service.getAllEvidences(query);
       res.json({
         success: true,

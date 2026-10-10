@@ -947,7 +947,15 @@
     - Loại bỏ ép kiểu lỏng lẻo `(req as any).user` và dummy fallback UUID `00000000-...` trong `IncidentController`, truy cập trực tiếp `req.user.id` chuẩn type.
     - Siết chặt validation cho Evidence: thêm regex định dạng chuẩn cho `mimeType` và chặn ký tự path traversal (`..`) trong `storageKey` của `createEvidenceSchema`.
     - Nâng quyền bảo vệ endpoint `POST /:id/comments` từ `PPE_INCIDENT_READ` lên `PPE_INCIDENT_UPDATE`.
-    - Cải thiện type safety trong `incident.server.ts` với `(err: unknown)` khi disconnect database.
-    - Loại bỏ triệt để `(this.db as any)` trong `IncidentRepository`, chuẩn hóa kiểu `IncidentPrismaClient`, `IncidentPrisma.IncidentWhereInput`, `IncidentPrisma.EvidenceWhereInput`, và sửa lỗi truyền object pagination vào `skip: pagination.skip, take: pagination.take`.
-    - Mở rộng test suite `tests/incident-service.test.ts` lên 26/26 test cases PASS 100%.
+  - **6. PostgreSQL Full-Text Search (FTS) & GIN Index Expansion (2026-10-10)**:
+    - Tạo migration SQL bất biến `prisma/incident/migrations/20261010161500_add_incident_full_text_search_gin_index/migration.sql` thêm GIN index `idx_incidents_fts` trên biểu thức `to_tsvector('simple', coalesce("description", '') || ' ' || coalesce("violation_type", ''))`.
+    - `IncidentRepository`:
+      - Bổ sung `searchFts(query: IncidentQueryDto)`: Sử dụng `Prisma.sql` parameterized raw query tra cứu qua GIN index, tính toán điểm độ phù hợp `ts_rank`. Hỗ trợ linh hoạt tiêu chí sắp xếp tùy chỉnh (`sortBy`, `sortOrder`) kết hợp `rank DESC`, mặc định `ORDER BY rank DESC, i.detected_at DESC`.
+      - Kết hợp phân trang chuẩn và truy vấn 2 giai đoạn (ID-based hydration) bảo đảm tải đầy đủ quan hệ `evidences` (take 1 kèm metadata) và `_count` (`evidences`, `comments`, `assignments`), đồng thời bảo toàn định dạng `serializeIncident`.
+      - Chuẩn hóa kiểu dữ liệu trả về `PaginatedResultDto<IncidentItemDto>`, loại bỏ `any` trong serializers và repository mapping.
+      - Tái sử dụng an toàn helper `buildTsQuery(search, "prefix")` từ `src/common/helpers/fts.helper.ts`.
+    - `IncidentController`: Sử dụng Express Request generics `Request<unknown, unknown, unknown, IncidentQueryDto>` và `Request<unknown, unknown, unknown, EvidenceQueryDto>`, loại bỏ hoàn toàn ép kiểu kép `as unknown as`.
+    - `IncidentService.getAllIncidents`: Tự động rẽ nhánh gọi `repository.searchFts` khi có `query.search?.trim()`, fallback về `findAllIncidents` khi không có từ khóa tìm kiếm.
+    - Test Suite: Mở rộng `tests/incident-service.test.ts` (lên 30 test cases) và `tests/full-text-search.test.ts` (lên 27 test cases), toàn bộ test suites đều PASS 100%.
+    - Verification: `pnpm exec prisma validate --schema=prisma/incident/schema.prisma`, `pnpm run lint` và `pnpm build` biên dịch TypeScript Strict Mode thành công 100% không lỗi.
 

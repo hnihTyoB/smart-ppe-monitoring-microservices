@@ -15,6 +15,9 @@ import { swaggerSpec } from "../src/config/swagger.config";
 import { findAllUserSchema } from "../src/modules/users/user.validation";
 import { listFilesSchema } from "../src/modules/files/file.validation";
 import { auditLogQuerySchema } from "../src/modules/rbac/rbac.validation";
+import { IncidentService } from "../src/modules/incident/incident.service";
+import { IncidentRepository } from "../src/modules/incident/incident.repository";
+import { incidentQuerySchema } from "../src/modules/incident/incident.validation";
 
 describe("PostgreSQL Full-Text Search (FTS) & GIN Index Optimization Test Suite", () => {
   describe("1. FTS Helper & tsquery Sanitization", () => {
@@ -571,5 +574,42 @@ describe("PostgreSQL Full-Text Search (FTS) & GIN Index Optimization Test Suite"
       assert.strictEqual(calledSearchFts, false);
       assert.strictEqual(calledFindAll, true);
     });
+
+    it("IncidentService.getAllIncidents điều phối gọi searchFts khi có query.search", async () => {
+      let calledSearchFts = false;
+      let calledFindAll = false;
+
+      const mockRepo = {
+        searchFts: async (_query: any) => {
+          calledSearchFts = true;
+          return {
+            data: [],
+            meta: { total: 0, page: 1, limit: 20, totalPages: 0 },
+          };
+        },
+        findAllIncidents: async (_query: any) => {
+          calledFindAll = true;
+          return {
+            data: [],
+            meta: { total: 0, page: 1, limit: 20, totalPages: 0 },
+          };
+        },
+      } as any;
+
+      const incidentService = new IncidentService(mockRepo);
+
+      // Khi có search -> gọi searchFts
+      await incidentService.getAllIncidents({ search: "NO_HELMET" });
+      assert.strictEqual(calledSearchFts, true);
+      assert.strictEqual(calledFindAll, false);
+
+      // Reset & khi không có search -> gọi findAllIncidents
+      calledSearchFts = false;
+      calledFindAll = false;
+      await incidentService.getAllIncidents({ status: "PENDING_REVIEW" });
+      assert.strictEqual(calledSearchFts, false);
+      assert.strictEqual(calledFindAll, true);
+    });
   });
 });
+

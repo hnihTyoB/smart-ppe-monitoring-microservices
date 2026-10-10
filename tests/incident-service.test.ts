@@ -525,4 +525,106 @@ describe("Task BE-06: PPE Incident Management Service Suite", () => {
       assert.ok(routePaths.includes("/incidents/health"));
     });
   });
+
+  // ── 6. Full-Text Search (FTS) & Service Routing ─────────────────────────────
+  describe("6. Incident Full-Text Search (FTS) & Query Routing", () => {
+    it("should route to repository.searchFts when query.search is present", async () => {
+      let calledSearchFts = false;
+      let calledFindAll = false;
+
+      const mockRepo = {
+        searchFts: async (_query: any) => {
+          calledSearchFts = true;
+          return {
+            data: [],
+            meta: { total: 0, page: 1, limit: 20, totalPages: 0 },
+          };
+        },
+        findAllIncidents: async (_query: any) => {
+          calledFindAll = true;
+          return {
+            data: [],
+            meta: { total: 0, page: 1, limit: 20, totalPages: 0 },
+          };
+        },
+      } as unknown as IncidentRepository;
+
+      const service = new IncidentService(mockRepo);
+
+      await service.getAllIncidents({ search: "không đội mũ" });
+      assert.strictEqual(calledSearchFts, true);
+      assert.strictEqual(calledFindAll, false);
+    });
+
+    it("should fallback to repository.findAllIncidents when query.search is absent or blank", async () => {
+      let calledSearchFts = false;
+      let calledFindAll = false;
+
+      const mockRepo = {
+        searchFts: async (_query: any) => {
+          calledSearchFts = true;
+          return {
+            data: [],
+            meta: { total: 0, page: 1, limit: 20, totalPages: 0 },
+          };
+        },
+        findAllIncidents: async (_query: any) => {
+          calledFindAll = true;
+          return {
+            data: [],
+            meta: { total: 0, page: 1, limit: 20, totalPages: 0 },
+          };
+        },
+      } as unknown as IncidentRepository;
+
+      const service = new IncidentService(mockRepo);
+
+      await service.getAllIncidents({ status: "PENDING_REVIEW" });
+      assert.strictEqual(calledSearchFts, false);
+      assert.strictEqual(calledFindAll, true);
+
+      calledFindAll = false;
+      await service.getAllIncidents({ search: "   " });
+      assert.strictEqual(calledSearchFts, false);
+      assert.strictEqual(calledFindAll, true);
+    });
+
+    it("should validate and parse search string in incidentQuerySchema", () => {
+      const parsed = incidentQuerySchema.parse({
+        search: "  khu vuc nguy hiem  ",
+        page: 1,
+        limit: 10,
+      });
+      assert.strictEqual(parsed.search, "khu vuc nguy hiem");
+      assert.strictEqual(parsed.page, 1);
+      assert.strictEqual(parsed.limit, 10);
+    });
+
+    it("should support custom sortBy and sortOrder when calling searchFts", async () => {
+      let passedQuery: any = null;
+
+      const mockRepo = {
+        searchFts: async (query: any) => {
+          passedQuery = query;
+          return {
+            data: [],
+            meta: { total: 0, page: 1, limit: 20, totalPages: 0 },
+          };
+        },
+      } as unknown as IncidentRepository;
+
+      const service = new IncidentService(mockRepo);
+      await service.getAllIncidents({
+        search: "NO_VEST",
+        sortBy: "detectedAt",
+        sortOrder: "asc",
+      });
+
+      assert.strictEqual(passedQuery.search, "NO_VEST");
+      assert.strictEqual(passedQuery.sortBy, "detectedAt");
+      assert.strictEqual(passedQuery.sortOrder, "asc");
+    });
+  });
 });
+
+

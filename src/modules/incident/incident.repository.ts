@@ -1,7 +1,8 @@
-import type {
-  PrismaClient as IncidentPrismaClient,
+import {
+  type PrismaClient as IncidentPrismaClient,
   Prisma as IncidentPrisma,
 } from "@prisma/client-incident";
+import { buildTsQuery } from "../../common/helpers/fts.helper";
 import {
   incidentPrisma,
   DEFAULT_INCIDENT_TRANSACTION_OPTIONS,
@@ -18,6 +19,7 @@ import {
   EvidenceQueryDto,
   CreateEvidenceAccessLogDto,
   PaginatedResultDto,
+  IncidentItemDto,
 } from "./incident.dto";
 import {
   INCIDENT_STATUS,
@@ -27,22 +29,26 @@ import {
 /**
  * Chuyển đổi dữ liệu Evidence an toàn với kiểu BigInt của trường fileSize
  */
-export function serializeEvidence<T>(evidence: T): T {
+export function serializeEvidence<T extends Record<string, unknown>>(evidence: T): T {
   if (!evidence || typeof evidence !== "object") return evidence;
-  const clone: any = { ...(evidence as any) };
+  const clone = { ...evidence };
   if (typeof clone.fileSize === "bigint") {
-    clone.fileSize = Number(clone.fileSize);
+    (clone as Record<string, unknown>).fileSize = Number(clone.fileSize);
   }
-  return clone as T;
+  return clone;
 }
 
-export function serializeIncident<T>(incident: T): T {
+export function serializeIncident<T extends Record<string, unknown>>(incident: T): T {
   if (!incident || typeof incident !== "object") return incident;
-  const clone: any = { ...(incident as any) };
+  const clone = { ...incident };
   if (Array.isArray(clone.evidences)) {
-    clone.evidences = clone.evidences.map((ev: any) => serializeEvidence(ev));
+    (clone as Record<string, unknown>).evidences = clone.evidences.map((ev: unknown) =>
+      typeof ev === "object" && ev !== null
+        ? serializeEvidence(ev as Record<string, unknown>)
+        : ev,
+    );
   }
-  return clone as T;
+  return clone;
 }
 
 export class IncidentRepository {
@@ -158,7 +164,7 @@ export class IncidentRepository {
 
   async findAllIncidents(
     query: IncidentQueryDto,
-  ): Promise<PaginatedResultDto<any>> {
+  ): Promise<PaginatedResultDto<IncidentItemDto>> {
     const page = query.page || 1;
     const limit = query.limit || 20;
     const pagination = calculatePaginationSkip(page, limit);
@@ -218,7 +224,134 @@ export class IncidentRepository {
     ]);
 
     return {
-      data: items.map((item: any) => serializeIncident(item)),
+      data: items.map((item) => serializeIncident(item) as unknown as IncidentItemDto),
+      meta: formatPaginationMeta(pagination.page, pagination.limit, total),
+    };
+  }
+
+  /**
+   * Tìm kiếm sự cố vi phạm bằng PostgreSQL Full-Text Search (tsvector, tsquery & GIN index)
+   * Tự động xếp hạng độ tương đồng bằng hàm ts_rank trên trường description và violation_type,
+   * đồng thời hỗ trợ linh hoạt tiêu chí sắp xếp tùy chỉnh khi người dùng chỉ định.
+   */
+  async searchFts(
+    query: IncidentQueryDto,
+  ): Promise<PaginatedResultDto<IncidentItemDto>> {
+    const search = query.search?.trim();
+    if (!search) {
+      return this.findAllIncidents(query);
+    }
+
+    const tsQuery = buildTsQuery(search, "prefix");
+    if (!tsQuery) {
+      return this.findAllIncidents(query);
+    }
+
+    const page = query.page || 1;
+    const limit = query.limit || 20;
+    const pagination = calculatePaginationSkip(page, limit);
+
+    const whereConditions: IncidentPrisma.Sql[] = [
+      IncidentPrisma.sql`to_tsvector('simple', coalesce(i.description, '') || ' ' || coalesce(i.violation_type, '')) @@ to_tsquery('simple', ${tsQuery})`,
+    ];
+
+    if (query.siteId) {
+      whereConditions.push(IncidentPrisma.sql`i.site_id = ${query.siteId}::uuid`);
+    }
+
+    if (query.cameraId) {
+      whereConditions.push(IncidentPrisma.sql`i.camera_id = ${query.cameraId}::uuid`);
+    }
+
+    if (query.violationType) {
+      whereConditions.push(IncidentPrisma.sql`i.violation_type = ${query.violationType}`);
+    }
+
+    if (query.severity) {
+      whereConditions.push(IncidentPrisma.sql`i.severity = ${query.severity}`);
+    }
+
+    if (query.status) {
+      whereConditions.push(IncidentPrisma.sql`i.status = ${query.status}`);
+    }
+
+    if (query.fromDate) {
+      whereConditions.push(IncidentPrisma.sql`i.detected_at >= ${new Date(query.fromDate)}`);
+    }
+
+    if (query.toDate) {
+      whereConditions.push(IncidentPrisma.sql`i.detected_at <= ${new Date(query.toDate)}`);
+    }
+
+    const whereClause = IncidentPrisma.sql`WHERE ${IncidentPrisma.join(whereConditions, " AND ")}`;
+
+    let orderByClause: IncidentPrisma.Sql;
+    const sortOrderSql =
+      query.sortOrder === "asc"
+        ? IncidentPrisma.sql`ASC`
+        : IncidentPrisma.sql`DESC`;
+
+    if (query.sortBy === "detectedAt") {
+      orderByClause = IncidentPrisma.sql`ORDER BY i.detected_at ${sortOrderSql}, rank DESC`;
+    } else if (query.sortBy === "createdAt") {
+      orderByClause = IncidentPrisma.sql`ORDER BY i.created_at ${sortOrderSql}, rank DESC`;
+    } else if (query.sortBy === "severity") {
+      orderByClause = IncidentPrisma.sql`ORDER BY i.severity ${sortOrderSql}, rank DESC`;
+    } else if (query.sortBy === "status") {
+      orderByClause = IncidentPrisma.sql`ORDER BY i.status ${sortOrderSql}, rank DESC`;
+    } else {
+      orderByClause = IncidentPrisma.sql`ORDER BY rank DESC, i.detected_at DESC`;
+    }
+
+    const [rankedRows, countResult] = await Promise.all([
+      this.db.$queryRaw<Array<{ id: string; rank: number }>>`
+        SELECT
+          i.id,
+          ts_rank(to_tsvector('simple', coalesce(i.description, '') || ' ' || coalesce(i.violation_type, '')), to_tsquery('simple', ${tsQuery})) as rank
+        FROM incidents i
+        ${whereClause}
+        ${orderByClause}
+        OFFSET ${pagination.skip}
+        LIMIT ${pagination.take}
+      `,
+      this.db.$queryRaw<Array<{ count: bigint }>>`
+        SELECT COUNT(*)::bigint as count
+        FROM incidents i
+        ${whereClause}
+      `,
+    ]);
+
+    const total = Number(countResult[0]?.count ?? 0);
+    const ids = rankedRows.map((r) => r.id);
+
+    if (ids.length === 0) {
+      return {
+        data: [],
+        meta: formatPaginationMeta(pagination.page, pagination.limit, total),
+      };
+    }
+
+    const items = await this.db.incident.findMany({
+      where: { id: { in: ids } },
+      include: {
+        evidences: {
+          take: 1,
+          include: { metadata: true },
+        },
+        _count: {
+          select: { evidences: true, comments: true, assignments: true },
+        },
+      },
+    });
+
+    const itemMap = new Map(items.map((item) => [item.id, item]));
+    const orderedItems = ids
+      .map((id) => itemMap.get(id))
+      .filter((item): item is NonNullable<typeof item> => Boolean(item))
+      .map((item) => serializeIncident(item) as unknown as IncidentItemDto);
+
+    return {
+      data: orderedItems,
       meta: formatPaginationMeta(pagination.page, pagination.limit, total),
     };
   }
