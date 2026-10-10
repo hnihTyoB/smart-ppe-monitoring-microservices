@@ -299,6 +299,18 @@ export class NotificationService {
     userId: string,
     dto: ListNotificationsDto,
   ): Promise<ListNotificationsResponseDto> {
+    if (dto.search?.trim() && typeof this.repository.searchFts === "function") {
+      const [items, total, meta] = await this.repository.searchFts(userId, dto);
+      return {
+        items,
+        total,
+        page: meta.page,
+        limit: meta.limit,
+        totalPages: meta.totalPages,
+        meta,
+      };
+    }
+
     const [items, total, meta] = await this.repository.findMany(userId, dto);
 
     return {

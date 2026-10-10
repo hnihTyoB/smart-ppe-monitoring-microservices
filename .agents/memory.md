@@ -1018,6 +1018,16 @@
     - **Preference Fallback Healing**: `getUserPreferences` tự động bổ sung và lưu các kênh mặc định còn thiếu (`DEFAULT_PREFERENCES`) khi người dùng mới chỉ cấu hình một phần kênh.
     - **Audit Log Error Visibility**: Thay thế nuốt lỗi âm thầm bằng `console.warn` trong `NotificationRepository.createAuditLog`.
     - **Magic Strings & Type Safety**: Thay thế chuỗi cứng `"ACTIVE"`, `"INACTIVE"`, `"CRITICAL"` bằng hằng số `NOTIFICATION_TEMPLATE_STATUS` và `NOTIFICATION_SEVERITY`; chuẩn hóa `IdentityPrisma.EmailNotificationWhereInput`.
+  - **6. PostgreSQL Full-Text Search (FTS) & GIN Index Expansion (2026-10-11)**:
+    - Tạo migration SQL bất biến `prisma/notification/migrations/20261011032000_add_notification_full_text_search_gin_index/migration.sql` thêm GIN index `idx_notifications_fts` trên biểu thức `to_tsvector('simple', coalesce("title", '') || ' ' || coalesce("content", ''))`.
+    - `NotificationRepository`:
+      - Bổ sung `searchFts(userId: string, dto: ListNotificationsDto)`: Sử dụng `NotificationPrisma.sql` parameterized raw query tra cứu qua GIN index, tính toán điểm độ phù hợp `ts_rank` sắp xếp `ORDER BY rank DESC, n.created_at DESC`.
+      - Kết hợp phân trang chuẩn và truy vấn 2 giai đoạn (ID-based hydration) bảo đảm tải đầy đủ quan hệ `template` (id, code, name), đồng thời chuẩn hóa định dạng tương thích In-App UI (`isRead`, `priority`, `type`).
+      - Tái sử dụng an toàn helper `buildTsQuery(search, "prefix")` từ `src/common/helpers/fts.helper.ts`.
+    - `NotificationService.list`: Tự động rẽ nhánh gọi `repository.searchFts` khi có `dto.search?.trim()`, fallback về `findMany` khi không có từ khóa tìm kiếm.
+    - `NotificationValidation`: Mở rộng `listNotificationsSchema` bổ sung `search: z.string().trim().max(200).optional()`, tự động đồng bộ Swagger UI `/api/docs`.
+    - Test Suite: Mở rộng `tests/notification-service.test.ts` (lên 27 test cases) và `tests/full-text-search.test.ts` (lên 28 test cases), toàn bộ test suites đều PASS 100%.
+    - Verification: `pnpm exec prisma validate --schema=prisma/notification/schema.prisma` và `pnpm build` biên dịch TypeScript Strict Mode thành công 100% không lỗi.
 - **PPE Microservices: Task BE-09 - Reporting & Analytics Service (2026-10-11)**:
   - **Mục tiêu**: Hoàn thiện toàn diện module Reporting & Analytics Service theo phân công đồ án PPE Microservices (`BE-09`), đặc tả kiến trúc kỹ thuật `D08.pdf` (Mục 1, 2.7, 2.8, 3.5, 4.2, 4.5, 6.2), và kiến trúc microservices độc lập (`ppe_reporting_db`, port 8894).
   - **1. Acceptance Criteria Cốt lõi & Dashboard APIs có số liệu**:

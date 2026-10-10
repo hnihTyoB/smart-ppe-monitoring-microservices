@@ -446,4 +446,90 @@ describe("Task BE-08: PPE Incident Notification Service Suite", () => {
       );
     });
   });
+
+  // ── 7. Notification Inbox Full-Text Search (FTS) ────────────────────────────
+  describe("7. Notification Inbox Full-Text Search (FTS) & Service Routing", () => {
+    it("should delegate to repository.searchFts when dto.search is provided", async () => {
+      let calledSearchFts = false;
+      let calledFindMany = false;
+
+      const mockRepo = {
+        searchFts: async (_userId: string, _dto: any) => {
+          calledSearchFts = true;
+          return [
+            [],
+            0,
+            { total: 0, page: 1, limit: 20, totalPages: 0 },
+          ] as const;
+        },
+        findMany: async (_userId: string, _dto: any) => {
+          calledFindMany = true;
+          return [
+            [],
+            0,
+            { total: 0, page: 1, limit: 20, totalPages: 0 },
+          ] as const;
+        },
+      } as unknown as NotificationRepository;
+
+      const service = new NotificationService(mockRepo);
+
+      const result = await service.list(fakeSafetyOfficerId, {
+        search: "cảnh báo vi phạm",
+      });
+
+      assert.strictEqual(calledSearchFts, true);
+      assert.strictEqual(calledFindMany, false);
+      assert.deepStrictEqual(result.items, []);
+      assert.strictEqual(result.total, 0);
+    });
+
+    it("should fallback to repository.findMany when dto.search is missing or empty whitespace", async () => {
+      let calledSearchFts = false;
+      let calledFindMany = false;
+
+      const mockRepo = {
+        searchFts: async (_userId: string, _dto: any) => {
+          calledSearchFts = true;
+          return [
+            [],
+            0,
+            { total: 0, page: 1, limit: 20, totalPages: 0 },
+          ] as const;
+        },
+        findMany: async (_userId: string, _dto: any) => {
+          calledFindMany = true;
+          return [
+            [],
+            0,
+            { total: 0, page: 1, limit: 20, totalPages: 0 },
+          ] as const;
+        },
+      } as unknown as NotificationRepository;
+
+      const service = new NotificationService(mockRepo);
+
+      await service.list(fakeSafetyOfficerId, { status: "SENT" });
+      assert.strictEqual(calledSearchFts, false);
+      assert.strictEqual(calledFindMany, true);
+
+      calledFindMany = false;
+      await service.list(fakeSafetyOfficerId, { search: "   " });
+      assert.strictEqual(calledSearchFts, false);
+      assert.strictEqual(calledFindMany, true);
+    });
+
+    it("should validate and sanitize search query in listNotificationsSchema", () => {
+      const parsed = listNotificationsSchema.parse({
+        search: "  mất tín hiệu camera  ",
+        page: 1,
+        limit: 10,
+      });
+
+      assert.strictEqual(parsed.search, "mất tín hiệu camera");
+      assert.strictEqual(parsed.page, 1);
+      assert.strictEqual(parsed.limit, 10);
+    });
+  });
 });
+

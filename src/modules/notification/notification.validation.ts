@@ -22,6 +22,7 @@ export const listNotificationsSchema = z.object({
     .optional(),
   incidentId: z.string().uuid("Invalid incident ID").optional(),
   type: z.string().optional(),
+  search: z.string().trim().max(200).optional(),
   fromDate: z.string().datetime({ offset: true }).optional(),
   toDate: z.string().datetime({ offset: true }).optional(),
 });

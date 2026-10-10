@@ -1,4 +1,7 @@
-import { Prisma as NotificationPrisma } from "@prisma/client-notification";
+import {
+  type PrismaClient as NotificationPrismaClient,
+  Prisma as NotificationPrisma,
+} from "@prisma/client-notification";
 import { Prisma as IdentityPrisma } from "@prisma/client";
 import {
   notificationPrisma,
@@ -22,6 +25,7 @@ import {
   formatPaginationMeta,
 } from "../../common/helpers/pagination.helper";
 import { isUuid } from "../../common/helpers/uuid.helper";
+import { buildTsQuery } from "../../common/helpers/fts.helper";
 import {
   ListNotificationsDto,
   ListEmailsDto,
@@ -47,7 +51,11 @@ export interface ClaimedEmailRecord {
 }
 
 export class NotificationRepository {
-  private readonly db = notificationPrisma;
+  private readonly db: NotificationPrismaClient;
+
+  constructor(dbClient?: NotificationPrismaClient) {
+    this.db = dbClient || (notificationPrisma as unknown as NotificationPrismaClient);
+  }
 
   // ─────────────────────────────────────────────
   // User Notifications Inbox (ppe_notification_db)
@@ -111,6 +119,127 @@ export class NotificationRepository {
     ]);
 
     const formattedItems: NotificationItemDto[] = items.map((item) => ({
+      id: item.id,
+      userId: item.userId,
+      incidentId: item.incidentId,
+      templateId: item.templateId,
+      channel: item.channel,
+      title: item.title,
+      content: item.content,
+      severity: item.severity,
+      status: item.status,
+      sentAt: item.sentAt,
+      readAt: item.readAt,
+      createdAt: item.createdAt,
+      isRead: item.status === NOTIFICATION_STATUS.READ || Boolean(item.readAt),
+      priority: item.severity,
+      type:
+        item.severity === NOTIFICATION_SEVERITY.CRITICAL
+          ? NOTIFICATION_TYPE.ALERT
+          : NOTIFICATION_TYPE.INFO,
+    }));
+
+    return [formattedItems, total, formatPaginationMeta(page, limit, total)] as const;
+  }
+
+  /**
+   * Tìm kiếm thông báo người dùng bằng PostgreSQL Full-Text Search (tsvector, tsquery & GIN index)
+   * Tự động xếp hạng độ tương đồng bằng hàm ts_rank trên trường title và content
+   */
+  async searchFts(userId: string, dto: ListNotificationsDto) {
+    const search = dto.search?.trim();
+    if (!search) {
+      return this.findMany(userId, dto);
+    }
+
+    const tsQuery = buildTsQuery(search, "prefix");
+    if (!tsQuery) {
+      return this.findMany(userId, dto);
+    }
+
+    const { isRead, status, severity, channel, incidentId, fromDate, toDate } = dto;
+    const { skip, take, page, limit } = calculatePaginationSkip(dto.page, dto.limit);
+
+    const whereConditions: NotificationPrisma.Sql[] = [
+      NotificationPrisma.sql`n.user_id = ${userId}::uuid`,
+      NotificationPrisma.sql`to_tsvector('simple', coalesce(n.title, '') || ' ' || coalesce(n.content, '')) @@ to_tsquery('simple', ${tsQuery})`,
+    ];
+
+    if (isRead !== undefined) {
+      if (isRead) {
+        whereConditions.push(NotificationPrisma.sql`n.status = ${NOTIFICATION_STATUS.READ}`);
+      } else {
+        whereConditions.push(NotificationPrisma.sql`n.status != ${NOTIFICATION_STATUS.READ}`);
+      }
+    }
+
+    if (status) {
+      whereConditions.push(NotificationPrisma.sql`n.status = ${status}`);
+    }
+
+    if (severity) {
+      whereConditions.push(NotificationPrisma.sql`n.severity = ${severity}`);
+    }
+
+    if (channel) {
+      whereConditions.push(NotificationPrisma.sql`n.channel = ${channel}`);
+    }
+
+    if (incidentId) {
+      whereConditions.push(NotificationPrisma.sql`n.incident_id = ${incidentId}::uuid`);
+    }
+
+    if (fromDate) {
+      whereConditions.push(NotificationPrisma.sql`n.created_at >= ${new Date(fromDate)}`);
+    }
+
+    if (toDate) {
+      whereConditions.push(NotificationPrisma.sql`n.created_at <= ${new Date(toDate)}`);
+    }
+
+    const whereClause = NotificationPrisma.sql`WHERE ${NotificationPrisma.join(whereConditions, " AND ")}`;
+
+    const [rankedRows, countResult] = await Promise.all([
+      this.db.$queryRaw<Array<{ id: string; rank: number }>>`
+        SELECT
+          n.id,
+          ts_rank(to_tsvector('simple', coalesce(n.title, '') || ' ' || coalesce(n.content, '')), to_tsquery('simple', ${tsQuery})) as rank
+        FROM notifications n
+        ${whereClause}
+        ORDER BY rank DESC, n.created_at DESC
+        OFFSET ${skip}
+        LIMIT ${take}
+      `,
+      this.db.$queryRaw<Array<{ count: bigint }>>`
+        SELECT COUNT(*)::bigint as count
+        FROM notifications n
+        ${whereClause}
+      `,
+    ]);
+
+    const total = Number(countResult[0]?.count ?? 0);
+    const ids = rankedRows.map((r: { id: string; rank: number }) => r.id);
+
+    if (ids.length === 0) {
+      const emptyItems: NotificationItemDto[] = [];
+      return [emptyItems, total, formatPaginationMeta(page, limit, total)] as const;
+    }
+
+    const items = await this.db.notification.findMany({
+      where: { id: { in: ids } },
+      include: {
+        template: {
+          select: { id: true, code: true, name: true },
+        },
+      },
+    });
+
+    const itemMap = new Map(items.map((item) => [item.id, item]));
+    const orderedItems = ids
+      .map((id: string) => itemMap.get(id))
+      .filter((item): item is (typeof items)[number] => Boolean(item));
+
+    const formattedItems: NotificationItemDto[] = orderedItems.map((item) => ({
       id: item.id,
       userId: item.userId,
       incidentId: item.incidentId,

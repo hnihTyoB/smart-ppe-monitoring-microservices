@@ -18,6 +18,9 @@ import { auditLogQuerySchema } from "../src/modules/rbac/rbac.validation";
 import { IncidentService } from "../src/modules/incident/incident.service";
 import { IncidentRepository } from "../src/modules/incident/incident.repository";
 import { incidentQuerySchema } from "../src/modules/incident/incident.validation";
+import { NotificationService } from "../src/modules/notification/notification.service";
+import { NotificationRepository } from "../src/modules/notification/notification.repository";
+import { listNotificationsSchema } from "../src/modules/notification/notification.validation";
 
 describe("PostgreSQL Full-Text Search (FTS) & GIN Index Optimization Test Suite", () => {
   describe("1. FTS Helper & tsquery Sanitization", () => {
@@ -609,6 +612,48 @@ describe("PostgreSQL Full-Text Search (FTS) & GIN Index Optimization Test Suite"
       await incidentService.getAllIncidents({ status: "PENDING_REVIEW" });
       assert.strictEqual(calledSearchFts, false);
       assert.strictEqual(calledFindAll, true);
+    });
+
+    it("NotificationService.list điều phối gọi searchFts khi có dto.search", async () => {
+      let calledSearchFts = false;
+      let calledFindMany = false;
+
+      const mockRepo = {
+        searchFts: async (_userId: string, _dto: any) => {
+          calledSearchFts = true;
+          return [
+            [],
+            0,
+            { total: 0, page: 1, limit: 20, totalPages: 0 },
+          ] as const;
+        },
+        findMany: async (_userId: string, _dto: any) => {
+          calledFindMany = true;
+          return [
+            [],
+            0,
+            { total: 0, page: 1, limit: 20, totalPages: 0 },
+          ] as const;
+        },
+      } as any;
+
+      const notificationService = new NotificationService(mockRepo);
+
+      // Khi có search -> gọi searchFts
+      await notificationService.list("00000000-0000-4000-8000-000000000001", {
+        search: "canh bao",
+      });
+      assert.strictEqual(calledSearchFts, true);
+      assert.strictEqual(calledFindMany, false);
+
+      // Reset & khi không có search -> gọi findMany
+      calledSearchFts = false;
+      calledFindMany = false;
+      await notificationService.list("00000000-0000-4000-8000-000000000001", {
+        status: "SENT",
+      });
+      assert.strictEqual(calledSearchFts, false);
+      assert.strictEqual(calledFindMany, true);
     });
   });
 });
