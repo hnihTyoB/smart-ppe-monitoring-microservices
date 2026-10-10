@@ -5,6 +5,8 @@ import {
   EmailTemplateKey,
   NOTIFICATION_TYPE,
   NOTIFICATION_PRIORITY,
+  NOTIFICATION_SEVERITY,
+  NOTIFICATION_TEMPLATE_STATUS,
   DEFAULT_EMAIL_SUBJECTS,
 } from "../constants/notification.constant";
 import { renderTemplateString } from "../helpers/template.helper";
@@ -86,25 +88,24 @@ class NotificationDispatcher {
     const template =
       await notificationRepository.findTemplateByCode(templateCode);
 
-    if (!template || !template.isActive) {
+    if (!template || template.status !== NOTIFICATION_TEMPLATE_STATUS.ACTIVE) {
       console.warn(
         `[NotificationDispatcher] Template '${templateCode}' not found or inactive.`,
       );
       return;
     }
 
-    const templateChannels = (template.channels as string[]) || [];
     const targetChannels =
-      options.channels || (templateChannels as NotificationChannel[]);
+      options.channels || [template.channel as NotificationChannel];
 
     const tasks: Promise<unknown>[] = [];
 
-    if (targetChannels.includes(NOTIFICATION_CHANNEL.WEB)) {
+    if (targetChannels.includes(NOTIFICATION_CHANNEL.WEB) || targetChannels.includes(NOTIFICATION_CHANNEL.IN_APP)) {
       const title = renderTemplateString(
-        template.title || template.name,
+        template.subjectTemplate || template.name,
         variables,
       );
-      const content = renderTemplateString(template.content, variables);
+      const content = renderTemplateString(template.contentTemplate, variables);
       tasks.push(
         this.dispatchWeb(userId, {
           type: options.type || NOTIFICATION_TYPE.INFO,
@@ -128,7 +129,7 @@ class NotificationDispatcher {
 
       if (emailAddress) {
         const subject = renderTemplateString(
-          template.subject || template.name,
+          template.subjectTemplate || template.name,
           variables,
         );
         tasks.push(
@@ -151,12 +152,10 @@ class NotificationDispatcher {
   ): Promise<void> {
     await notificationRepository.createSingleNotification({
       userId,
-      type: payload.type,
-      priority: payload.priority,
+      channel: NOTIFICATION_CHANNEL.IN_APP,
+      severity: payload.priority || NOTIFICATION_SEVERITY.NORMAL,
       title: payload.title,
       content: payload.content,
-      actionUrl: payload.actionUrl,
-      metadata: payload.metadata,
     });
   }
 
@@ -170,13 +169,12 @@ class NotificationDispatcher {
       DEFAULT_EMAIL_SUBJECTS[payload.templateKey] ||
       "Thông báo từ hệ thống";
 
-    await notificationRepository.createSingleEmailNotification({
+    await notificationRepository.createSingleNotification({
       userId,
-      toEmail: payload.toEmail,
-      subject,
-      templateKey: payload.templateKey,
-      templateData: payload.templateData,
-      status: EMAIL_STATUS.PENDING,
+      channel: NOTIFICATION_CHANNEL.EMAIL,
+      severity: NOTIFICATION_SEVERITY.NORMAL,
+      title: subject,
+      content: JSON.stringify(payload.templateData),
     });
   }
 

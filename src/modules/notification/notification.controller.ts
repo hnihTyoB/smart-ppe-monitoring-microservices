@@ -1,10 +1,12 @@
 import { Request, Response, NextFunction } from "express";
-import { NotificationService } from "./notification.service";
+import { NotificationService, notificationService } from "./notification.service";
 import { sseManagerService } from "../../common/services/sse-manager.service";
 import {
   ListNotificationsDto,
   SendNotificationDto,
   BroadcastNotificationDto,
+  DispatchIncidentNotificationDto,
+  UpdateNotificationPreferenceDto,
   ListEmailsDto,
   ListNotificationTemplatesDto,
   CreateNotificationTemplateDto,
@@ -14,7 +16,15 @@ import {
 } from "./notification.dto";
 
 export class NotificationController {
-  private readonly service = new NotificationService();
+  private readonly service: NotificationService;
+
+  constructor(service?: NotificationService) {
+    this.service = service || notificationService;
+  }
+
+  // ─────────────────────────────────────────────
+  // Realtime Stream & Stream Ticket
+  // ─────────────────────────────────────────────
 
   createStreamTicket = (
     req: Request,
@@ -40,6 +50,32 @@ export class NotificationController {
       next(error);
     }
   };
+
+  // ─────────────────────────────────────────────
+  // PPE Incident Notification Dispatch (BE-08)
+  // ─────────────────────────────────────────────
+
+  dispatchIncidentNotification = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) => {
+    try {
+      const dto = req.body as DispatchIncidentNotificationDto;
+      const result = await this.service.dispatchIncidentNotification(dto);
+      res.status(201).json({
+        success: true,
+        message: "Phát cảnh báo sự cố vi phạm PPE thành công",
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  // ─────────────────────────────────────────────
+  // User Notification Inbox Management
+  // ─────────────────────────────────────────────
 
   list = async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -70,7 +106,7 @@ export class NotificationController {
   markAsRead = async (req: Request, res: Response, next: NextFunction) => {
     try {
       await this.service.markAsRead(req.user.id, req.params.id);
-      res.json({ success: true, message: "Notification marked as read" });
+      res.json({ success: true, message: "Đã đánh dấu thông báo là đã đọc" });
     } catch (error) {
       next(error);
     }
@@ -79,7 +115,7 @@ export class NotificationController {
   markAllAsRead = async (req: Request, res: Response, next: NextFunction) => {
     try {
       await this.service.markAllAsRead(req.user.id);
-      res.json({ success: true, message: "All notifications marked as read" });
+      res.json({ success: true, message: "Đã đánh dấu tất cả thông báo là đã đọc" });
     } catch (error) {
       next(error);
     }
@@ -88,11 +124,49 @@ export class NotificationController {
   delete = async (req: Request, res: Response, next: NextFunction) => {
     try {
       await this.service.delete(req.user.id, req.params.id);
-      res.json({ success: true, message: "Notification deleted" });
+      res.json({ success: true, message: "Đã xóa thông báo" });
     } catch (error) {
       next(error);
     }
   };
+
+  // ─────────────────────────────────────────────
+  // User Notification Preferences
+  // ─────────────────────────────────────────────
+
+  getPreferences = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const preferences = await this.service.getUserPreferences(req.user.id);
+      res.json({
+        success: true,
+        data: preferences,
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  updatePreference = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) => {
+    try {
+      const dto = req.body as UpdateNotificationPreferenceDto;
+      const updated = await this.service.updateUserPreference(req.user.id, dto);
+      res.json({
+        success: true,
+        message: "Cập nhật cấu hình kênh nhận thông báo thành công",
+        data: updated,
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  // ─────────────────────────────────────────────
+  // Legacy / Direct Send & Broadcast
+  // ─────────────────────────────────────────────
 
   send = async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -100,7 +174,7 @@ export class NotificationController {
       const result = await this.service.send(dto);
       res.status(201).json({
         success: true,
-        message: "Notification dispatched successfully",
+        message: "Phát thông báo thành công",
         data: result,
       });
     } catch (error) {
@@ -114,7 +188,7 @@ export class NotificationController {
       const result = await this.service.broadcast(dto);
       res.status(201).json({
         success: true,
-        message: "Broadcast notification sent successfully",
+        message: "Gửi thông báo toàn hệ thống thành công",
         data: result,
       });
     } catch (error) {
@@ -142,7 +216,7 @@ export class NotificationController {
       await this.service.retryEmail(req.params.id);
       res.json({
         success: true,
-        message: "Email scheduled for retry",
+        message: "Đã lên lịch thử lại gửi email",
       });
     } catch (error) {
       next(error);
@@ -191,7 +265,7 @@ export class NotificationController {
       });
       res.status(201).json({
         success: true,
-        message: "Notification template created successfully",
+        message: "Tạo mẫu thông báo thành công",
         data: template,
       });
     } catch (error) {
@@ -209,7 +283,7 @@ export class NotificationController {
       });
       res.json({
         success: true,
-        message: "Notification template updated successfully",
+        message: "Cập nhật mẫu thông báo thành công",
         data: template,
       });
     } catch (error) {
@@ -226,7 +300,7 @@ export class NotificationController {
       });
       res.json({
         success: true,
-        message: "Notification template deleted successfully",
+        message: "Đã xóa mẫu thông báo",
       });
     } catch (error) {
       next(error);
@@ -267,3 +341,5 @@ export class NotificationController {
     }
   };
 }
+
+export const notificationController = new NotificationController();

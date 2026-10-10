@@ -17,6 +17,7 @@ import { notificationSubscriber } from "./common/subscribers/notification.subscr
 import { eventBus } from "./common/services/event-bus.service";
 import { sseManagerService } from "./common/services/sse-manager.service";
 import { prisma } from "./database/prisma.client";
+import { notificationPrisma } from "./database/notification.client";
 
 const PORT = envConfig.notification.port;
 
@@ -105,9 +106,12 @@ export async function handleNotificationShutdown(
     await eventBus.close();
     console.log("[Notification Service] SSE and EventBus connections closed.");
 
-    // 5. Disconnect Prisma DB client
-    await prisma.$disconnect();
-    console.log("[Notification Service] Database client disconnected.");
+    // 5. Disconnect Prisma DB clients
+    await Promise.allSettled([
+      prisma.$disconnect(),
+      notificationPrisma.$disconnect(),
+    ]);
+    console.log("[Notification Service] Database clients disconnected.");
 
     console.log("[Notification Service] Graceful shutdown completed cleanly.");
     clearTimeout(forceExitTimer);

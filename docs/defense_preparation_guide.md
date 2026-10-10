@@ -268,17 +268,178 @@
 
 ---
 
-## 🛠️ 6. CHECKLIST CHUẨN BỊ TRƯỚC GIỜ BẢO VỆ
+## 🛡️ 6. CHUYÊN ĐỀ SÂU: 5 CÂU HỎI VẤN ĐÁP TỪ MODULE INCIDENT MANAGEMENT (TASK BE-06)
+
+### 🔹 Câu 28 (Task BE-06: `incident.service.ts`): Incident State Machine & Trách nhiệm giải trình khi DISMISSED
+* **Câu hỏi**: *"Tại sao khi bác bỏ sự cố (`DISMISSED` / False Alarm), hệ thống bắt buộc nhập `reason` tối thiểu 3 ký tự, còn khi `CONFIRMED` thì lại là tùy chọn? Khi sự cố đã `CLOSED` hoặc `DISMISSED` thì có được chỉnh sửa hay đính kèm bằng chứng nữa không?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô:  
+  > 1) **Trách nhiệm giải trình & MLOps Feedback**: Bác bỏ một vi phạm an toàn là quyết định nhạy cảm. Bắt buộc nhập lý do (tối thiểu 3 ký tự) để chống việc cán bộ an toàn lơ là bỏ qua vi phạm thật mà không giải trình, đồng thời lý do này là nhãn dữ liệu quan trọng phục vụ phân loại mẫu khó (Hard Negatives) cho huấn luyện lại AI. Khi xác nhận (CONFIRMED), hệ thống tự gán lý do mặc định.  
+  > 2) **Tính đóng băng bất biến (Immutability)**: Khi sự cố đã CLOSED hoặc DISMISSED, Service chặn toàn bộ các thao tác chỉnh sửa, gán thêm bằng chứng hoặc phân công (ném lỗi 400), bảo toàn tính toàn vẹn pháp lý của hồ sơ thanh tra."*
+
+---
+
+### 🔹 Câu 29 (Task BE-06: `incident.repository.ts`): Xử lý BigInt Serialization & Atomicity trong Repository
+* **Câu hỏi**: *"Tại sao trong `incident.repository.ts` em phải viết hàm `serializeEvidence` ép kiểu `fileSize` từ `bigint` sang `Number`? Và tại sao `transitionStatus` phải bọc trong `db.$transaction`?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô:  
+  > 1) **Khắc phục lỗi BigInt Serialization của V8 Engine**: Trong PostgreSQL, cột `file_size` có kiểu BIGINT (8 bytes) và Prisma map sang kiểu native `BigInt` của JavaScript. `JSON.stringify` mặc định không thể parse `BigInt` và sẽ ném lỗi runtime `TypeError: Do not know how to serialize a BigInt`, gây sập response 500 nếu không serialize về Number an toàn.  
+  > 2) **Tính nguyên tử (Atomicity & Audit Trail)**: Cập nhật trạng thái sự cố và ghi nhật ký `incident_status_history` phải nằm trong cùng 1 transaction nguyên tử. Nếu không dùng transaction, giả sử update status thành công nhưng ghi log history bị crash/lỗi mạng, hệ thống sẽ bị mất vết kiểm toán (Audit Trail) - không ai biết ai đã đổi trạng thái, khi nào và vì lý do gì, vi phạm tiêu chuẩn bảo mật dữ liệu."*
+
+---
+
+### 🔹 Câu 30 (Task BE-06: `incident.server.ts`): Dual-Mounting Microservice & 3-Step Graceful Shutdown
+* **Câu hỏi**: *"Tại sao Incident Service vừa có `incident.server.ts` chạy cổng 8893, vừa được mount vào Monolith? Cơ chế Graceful Shutdown hoạt động ra sao?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô:  
+  > 1) **Triển khai linh hoạt theo Strangler Fig**: Dual-Mounting giúp dự án linh hoạt tối đa — khi dev local hoặc máy ít RAM có thể chạy monolithic `pnpm dev` (:8888) gọn nhẹ không tốn tài nguyên; khi triển khai Docker/Traefik hoặc production có thể chạy tách process độc lập (:8893) để chịu tải cao mà không phải sửa code nghiệp vụ.  
+  > 2) **Graceful Shutdown 3 bước chuẩn công nghiệp**: Khi nhận SIGTERM, server đóng `closeIdleConnections()`, dừng nhận request mới, hoàn tất các request đang dang dở, ngắt kết nối `incidentPrisma.$disconnect()` và có watchdog timer 10s để ép thoát nếu bị treo, chống rò rỉ kết nối và mất mát dữ liệu."*
+
+---
+
+### 🔹 Câu 31 (Task BE-06: `incident.service.ts`): Zero-Latency Evidence Access Logging & Chống Path Traversal
+* **Câu hỏi**: *"Tại sao việc ghi log `logEvidenceAccess` khi xem bằng chứng lại chạy bất đồng bộ fire-and-forget? Và tại sao `storageKey` phải kiểm tra cấm `..`?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô:  
+  > 1) **Tối ưu độ trễ (Zero Latency Impact)**: Ghi vết truy cập bằng chứng (Audit Access Log) là tác vụ phụ trợ (side-effect). Việc gọi fire-and-forget không `await` giúp API trả URL bằng chứng về cho client ngay lập tức (tiết kiệm 10-20ms DB roundtrip), bảo đảm trải nghiệm xem mượt mà; nếu ghi log lỗi thì chỉ log warn, không làm crash request xem ảnh của người dùng.  
+  > 2) **Chống Path Traversal (CWE-22)**: Chặn `..` trong `storageKey` ngăn chặn attacker truyền các đường dẫn tương đối độc hại như `../../etc/passwd` hoặc trỏ vượt ra ngoài bucket/thư mục bằng chứng được chỉ định khi backend sinh Presigned URL hoặc đọc file từ MinIO/ổ cứng cục bộ."*
+
+---
+
+### 🔹 Câu 32 (Task BE-06: Live Demo Incident Lifecycle): Kịch bản Demo 2 phút trên Swagger UI
+* **Câu hỏi**: *"Hãy trình bày kịch bản Live Demo 2 phút trên Swagger UI để chứng minh trọn vẹn vòng đời xử lý sự cố từ PENDING_REVIEW -> CONFIRMED -> RESOLVED -> CLOSED?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Hội đồng, em xin demo trực tiếp luồng 4 bước chuẩn trên Swagger UI (`/api/docs`):  
+  > 1. **Tạo sự cố**: Gọi `POST /api/v1/incidents` tạo vi phạm `NO_HELMET` kèm ảnh bằng chứng; hệ thống tự gán `PENDING_REVIEW` và sinh bản ghi audit đầu tiên trong `statusHistory`.  
+  > 2. **Human Review**: Đăng nhập tài khoản `officer@ppe.local` (SAFETY_OFFICER) gọi `POST /incidents/{id}/review` với `decision: 'CONFIRMED'`.  
+  > 3. **Xử lý vi phạm**: Gọi `POST /incidents/{id}/resolve` với `resolutionNote`, hệ thống gán `resolvedAt` và chuyển sang `RESOLVED`.  
+  > 4. **Đóng sự cố**: Gọi `POST /incidents/{id}/close` đưa về `CLOSED`; sau đó gọi thử API sửa thông tin để chứng minh hệ thống chặn 400 bảo vệ tính bất biến của hồ sơ."*
+
+---
+
+## 🔒 7. CHUYÊN ĐỀ SÂU: 5 CÂU HỎI VẤN ĐÁP TỪ MODULE EVIDENCE STORAGE (TASK BE-07)
+
+### 🔹 Câu 33 (Task BE-07: `evidence-storage.service.ts`): Presigned Upload PUT URL vs Direct Multipart Upload
+* **Câu hỏi**: *"Tại sao em thiết kế cả 2 phương thức tải bằng chứng: Cấp Presigned PUT URL (`requestEvidenceUploadUrl`) và Tải trực tiếp Multipart (`uploadEvidenceDirect`)? Presigned URL giải quyết bài toán nghẽn cổ chai I/O và RAM của Backend như thế nào?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô:  
+  > 1) **Presigned Upload URL (Tối ưu tải trọng)**: AI Edge / Client tải trực tiếp video clip hoặc ảnh lớn thẳng lên MinIO/S3 mà KHÔNG đi qua Backend. Việc này giúp Backend giảm 100% băng thông I/O và RAM, tránh nghẽn cổ chai khi hàng chục camera cùng gửi video cùng lúc.  
+  > 2) **Direct Multipart Upload (Tiện ích & Fallback)**: Dùng cho các client không hỗ trợ gọi 2 bước (ví dụ: upload nhanh từ Web Admin hoặc thiết bị di động), Backend tự động dùng Sharp trích xuất kích thước ảnh (width, height), tính SHA-256 Checksum và lưu CSDL trong 1 request duy nhất. Hệ thống hỗ trợ cả 2 để vừa tối ưu hiệu năng vừa linh hoạt cho tích hợp."*
+
+---
+
+### 🔹 Câu 34 (Task BE-07: `evidence-storage.service.ts`): Streaming SHA-256 Checksum (Chống OOM) & crypto.timingSafeEqual
+* **Câu hỏi**: *"Tại sao khi tính toán SHA-256 từ Object Storage, em lại đọc qua Stream (`for await chunk`) thay vì nạp toàn bộ tệp vào Buffer RAM? Và tại sao khi so khớp mã băm lại dùng `crypto.timingSafeEqual` thay vì toán tử `===`?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô:  
+  > 1) **Chống tràn bộ nhớ RAM (OOM Crash)**: Các video clip vi phạm có thể lên tới hàng trăm MB hoặc GB. Nếu nạp toàn bộ vào RAM Buffer, nhiều request đồng thời sẽ gây tràn Heap bộ nhớ của Node.js (Out-Of-Memory) làm sập container. Xử lý qua Stream (`for await chunk`) giúp bộ nhớ tiêu thụ luôn cố định O(1) (vài chục KB) bất kể dung lượng file.  
+  > 2) **Chống tấn công Timing Attack**: Toán tử `===` dừng ngay ở ký tự sai đầu tiên, khiến thời gian so sánh chênh lệch và có thể bị hacker đo đạc để đoán chuỗi hash. `crypto.timingSafeEqual` so sánh với thời gian hằng số (Constant Time), bảo đảm chuẩn an toàn mật mã học."*
+
+---
+
+### 🔹 Câu 35 (Task BE-07: `evidence-storage.service.ts`): Tiêu đề ResponseContentDisposition chuẩn RFC 5987 & Chống Double-Logging
+* **Câu hỏi**: *"Trong `getPresignedDownloadUrl`, tiêu đề `ResponseContentDisposition` với `inline` vs `attachment` và `filename*=UTF-8` giải quyết bài toán gì cho UX và tên file tiếng Việt? Tại sao trong Service em cố tình không truyền `actorId` vào `getEvidenceById` trước khi ghi log DOWNLOAD?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô:  
+  > 1) **Chuẩn hóa hiển thị & Tên file tiếng Việt**: Nếu dùng link S3 trần, trình duyệt sẽ tự động ép tải file về (attachment) hoặc hiện tên UUID ngẫu nhiên khó hiểu. Cấu hình RFC 5987 (`inline` vs `attachment` và `filename*=UTF-8`) giúp: khi Giám sát viên muốn xem trước trên Web Dashboard thì ảnh/clip hiển thị trực tiếp trong thẻ `<img>`/`<video>`, khi bấm Tải về thì lưu đúng tên file tiếng Việt có dấu.  
+  > 2) **Chống ghi đúp log truy vết (Double Logging Guard)**: Hàm `getEvidenceById` mặc định tự ghi log `VIEW` nếu có `actorId`. Khi người dùng thực hiện hành động `DOWNLOAD`, nếu truyền `actorId` vào `getEvidenceById` thì hệ thống sẽ ghi 2 bản ghi log liên tiếp (`VIEW` rồi `DOWNLOAD`), làm sai lệch số liệu thống kê truy vết thanh tra."*
+
+---
+
+### 🔹 Câu 36 (Task BE-07: `evidence-storage.service.ts`): Thẩm định Tính toàn vẹn Pháp lý (verify-checksum) & Xóa tệp vật lý S3
+* **Câu hỏi**: *"Endpoint `GET /api/v1/evidences/:id/verify-checksum` hoạt động như thế nào để chứng minh trước cơ quan thanh tra rằng bằng chứng không bị can thiệp? Khi xóa một bằng chứng (`DELETE /evidences/:id`), hệ thống giải quyết rác lưu trữ (Orphan Objects) trên MinIO ra sao?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô:  
+  > 1) **Quy trình xác thực toàn vẹn**: Khi gọi `GET /evidences/:id/verify-checksum`, Backend tải trực tiếp tệp từ MinIO/S3 qua stream, tính toán lại mã SHA-256 thực tế (`actualChecksum`), rồi so khớp bằng `crypto.timingSafeEqual` với mã `expectedChecksum` đã được băm bất biến ngay lúc AI ghi nhận sự cố. API trả về `{ isValid: true/false, actualChecksum, expectedChecksum, verifiedAt }` chứng minh bằng chứng số còn nguyên bản.  
+  > 2) **Dọn dẹp tệp vật lý đồng bộ**: Khi xóa bằng chứng, Service xóa bản ghi trong CSDL `ppe_incident_db` đồng thời gọi `storage.deleteObject(storageKey)` để xóa tệp vật lý trên MinIO S3, triệt tiêu hoàn toàn rác file mồ côi (Orphan Objects)."*
+
+---
+
+### 🔹 Câu 37 (Task BE-07: Live Demo Evidence Storage): Kịch bản Demo 2 phút Bằng chứng số & Checksum
+* **Câu hỏi**: *"Hãy trình bày kịch bản Live Demo 2 phút trên Swagger UI để chứng minh: 1) Tải lên bằng chứng có băm SHA-256, 2) Lấy link xem trước an toàn có log truy vết, và 3) Thẩm định tính toàn vẹn (verify-checksum) trước Hội đồng?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Hội đồng, em xin demo luồng 3 bước thực chiến trên Swagger UI (`/api/docs`):  
+  > 1. **Tải lên có băm mật mã**: Gọi `POST /api/v1/evidences/direct-upload` (hoặc `POST /upload-url`), tải tệp ảnh vi phạm; hệ thống tự dùng Sharp đo đạc (width, height), băm SHA-256 Checksum, lưu MinIO và CSDL.  
+  > 2. **Xem trước & Truy vết**: Gọi `GET /evidences/{id}/download-url?action=VIEW`, mở URL vừa nhận trên tab mới để xem ảnh trực tiếp (inline); đồng thời kiểm tra bảng `evidence_access_logs` cho thấy hệ thống đã tự động ghi log VIEW.  
+  > 3. **Thẩm định pháp lý**: Gọi `GET /evidences/{id}/verify-checksum`, hệ thống đọc stream từ MinIO, băm lại và trả về `isValid: true` cùng thời điểm `verifiedAt`, chứng minh bằng chứng số toàn vẹn 100% trước hội đồng."*
+
+---
+
+## 📢 8. CHUYÊN ĐỀ SÂU: 5 CÂU HỎI VẤN ĐÁP TỪ MODULE NOTIFICATION & REALTIME SSE (TASK BE-08)
+
+### 🔹 Câu 38 (Task BE-08: `notification.service.ts`): Phân luồng Cảnh báo Đa kênh & Ma trận Trọng số Nghiêm trọng (Chống Alert Fatigue)
+* **Câu hỏi**: *"Trong môi trường công trường thực tế, hệ thống camera AI có thể phát hiện hàng trăm vi phạm mỗi ngày. Nếu thông báo được bắn liên tục, cán bộ an toàn sẽ gặp hiện tượng 'Alert Fatigue' (kiệt quệ cảnh báo, spam email) dẫn đến bỏ sót các tai nạn nguy kịch. Em đã thiết kế kiến trúc phân luồng cảnh báo đa kênh và cơ chế lọc ngưỡng nghiêm trọng trong Notification Service như thế nào để khắc phục triệt để vấn đề này?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô:  
+  > 1) **Ma trận trọng số độ nghiêm trọng (`SEVERITY_WEIGHT`)**: Em định lượng các cấp độ cảnh báo thành số nguyên so sánh được: `LOW: 1, NORMAL: 2, MEDIUM: 2, HIGH: 3, CRITICAL: 4`.  
+  > 2) **Phân tầng đa kênh (Multi-channel Tiering)**:  
+  >    - **Kênh thời gian thực In-App SSE**: Mặc định nhận ngưỡng từ `LOW` trở lên để hiển thị trực quan ngay lập tức trên màn hình giám sát trực ban mà không gây ồn ào hay tốn chi phí.  
+  >    - **Kênh ngoại vi tốn kém & dễ gây phiền (Email/Zalo/Webhook)**: Mặc định chỉ kích hoạt khi mức độ đạt từ `HIGH` hoặc `CRITICAL` (ví dụ: vi phạm không mũ bảo hiểm trong vùng nguy hiểm cao hoặc xâm nhập vùng cấm nguy hiểm tính mạng).  
+  > 3) **Tùy biến theo Cán bộ (`NotificationPreference`)**: Mỗi giám sát viên có thể tự cấu hình ngưỡng `minSeverity` riêng cho từng kênh tùy theo ca trực và vị trí phụ trách.  
+  > 4) **Lọc từ nguồn AI Pipeline**: Ở tầng Rule Engine (Site Service) đã thiết lập `cooldownDuration` (30s) và `confirmationDuration` (2s) để dập tắt vi phạm ảo ngay tại biên trước khi chuyển vào luồng thông báo."*
+
+---
+
+### 🔹 Câu 39 (Task BE-08: `notification.controller.ts`): Bắt tay SSE An toàn qua Short-Lived Stream Ticket (RFC-Compliant)
+* **Câu hỏi**: *"Khi triển khai SSE (Server-Sent Events) đẩy cảnh báo thời gian thực về browser, API chuẩn `EventSource` không hỗ trợ custom header `Authorization: Bearer <token>`. Nếu truyền Access Token thẳng lên Query Param (`?token=...`), rủi ro bảo mật là gì và em đã giải quyết bài toán Handshake SSE an toàn này như thế nào?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô:  
+  > 1) **Rủi ro rò rỉ token khi truyền URL Query Param**: Việc đưa JWT Access Token dài hạn vào query string khiến token bị lưu dạng văn bản rõ (plaintext) trong Access Log của Traefik Reverse Proxy, lịch sử duyệt web (browser history), header Referer, và các hệ thống CDN/Logging trung gian. Bất kỳ ai có quyền xem log đều có thể chiếm quyền tài khoản.  
+  > 2) **Giải pháp Short-Lived Stream Ticket**:  
+  >    - **Bước 1**: Trình duyệt gọi `POST /api/v1/notifications/stream-ticket` mang theo `Authorization: Bearer <access_token>` chuẩn mực.  
+  >    - **Bước 2**: Backend xác thực danh tính và cấp phát một vé tạm thời (`JWT_PURPOSE.SSE_STREAM_TICKET`) có hạn dùng cực ngắn (60 giây), ký bằng secret riêng và chỉ chứa `userId`.  
+  >    - **Bước 3**: Trình duyệt dùng `new EventSource('/api/v1/notifications/stream?ticket=' + ticket)` để mở luồng kết nối `text/event-stream`.  
+  >    - **Bước 4**: Backend chỉ chấp nhận token có đúng mục đích `SSE_STREAM_TICKET`. Dù URL có bị ghi log thì ticket này cũng hết hạn sau 60s và hoàn toàn không có quyền gọi bất kỳ REST API nghiệp vụ nào khác."*
+
+---
+
+### 🔹 Câu 40 (Task BE-08: `notification.repository.ts`): Triệt tiêu Lỗi N+1 Query & Safe Fallback Default Preferences
+* **Câu hỏi**: *"Khi một sự cố nguy hiểm xảy ra ở công trường lớn có hàng chục cán bộ an toàn phụ trách, làm thế nào hệ thống của em giải quyết bài toán hiệu năng tránh N+1 Query khi đọc cấu hình thông báo (`NotificationPreference`)? Trường hợp cán bộ mới chưa từng cài đặt preference thì hệ thống xử lý như thế nào?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô:  
+  > 1) **Triệt tiêu N+1 Query bằng Batching**: Khi cần thông báo cho N cán bộ, em tuyệt đối không chạy vòng lặp gọi `findUnique` N lần. Thay vào đó, em thiết kế `findPreferencesByUserIds(userIds)` dùng toán tử SQL `WHERE userId IN (...)` gom tất cả vào đúng 1 câu query duy nhất đến database.  
+  > 2) **Tra cứu in-memory O(1)**: Kết quả truy vấn được map vào một bảng băm `Map<string, NotificationPreference>` trên RAM để tra cứu cấu hình theo `userId` với độ phức tạp $O(1)$.  
+  > 3) **Pattern Safe Fallback**: Đối với các cán bộ mới chưa từng tạo bản ghi cấu hình, hệ thống không bỏ rơi người dùng mà tự động fallback về hằng số `DEFAULT_PREFERENCES` (In-App: LOW, Email: HIGH). Cách làm này đảm bảo không phát sinh bản ghi rác trong CSDL mà mọi cán bộ vẫn luôn nhận được cảnh báo bảo vệ an toàn."*
+
+---
+
+### 🔹 Câu 41 (Task BE-08: `incident.service.ts` & `notification-dispatcher.service.ts`): Cô lập Lỗi (Fault Isolation) & Luồng Bất đồng bộ Non-blocking
+* **Câu hỏi**: *"Giả sử máy chủ gửi Mail (SMTP/SendGrid) bị mất mạng hoặc timeout kéo dài 10-15 giây, sự cố an toàn lao động (Incident) vừa được camera AI phát hiện có bị ảnh hưởng hoặc rollback không? Em đã thiết kế kiến trúc cô lập lỗi (Fault Isolation) giữa Incident Service và Notification Service như thế nào?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô:  
+  > 1) **Độc lập tính toàn vẹn (Zero Rollback)**: Bản ghi sự cố và bằng chứng số mang tính pháp lý tuyệt đối KHÔNG bao giờ bị hủy hoặc rollback vì lỗi của các dịch vụ bên ngoài. Sự cố được lưu thành công vào CSDL `ppe_incident_db` trước tiên.  
+  > 2) **Cô lập lỗi (Fault Isolation)**: Lệnh kích hoạt thông báo được tách biệt hoàn toàn ra khỏi transaction ghi nhận sự cố. `IncidentService` gọi `NotificationDispatcherService` theo cơ chế Non-blocking có khối `try...catch` bọc ngoài độc lập; nếu việc gửi email hay SSE thất bại, hệ thống chỉ ghi log `warn/error` mà không throw ngoại lệ làm gián đoạn API của Incident.  
+  > 3) **Quản lý trạng thái (`EMAIL_STATUS`)**: Mọi email gửi đi được theo dõi bằng trạng thái `PENDING`, `SENT`, `FAILED`. Các email thất bại do sự cố mạng tạm thời có thể được quét lại bởi cơ chế Retry Worker mà không làm treo luồng tiếp nhận sự cố thời gian thực."*
+
+---
+
+### 🔹 Câu 42 (Task BE-08: Live Demo Notification & SSE): Kịch bản Demo 2 phút trên Swagger UI & Trình duyệt
+* **Câu hỏi**: *"Trong 2 phút thuyết trình đồ án, em sẽ thiết kế kịch bản Live Demo như thế nào để chứng minh trực quan toàn bộ sức mạnh của Notification Service (từ bắt tay SSE bằng Stream Ticket, đẩy thông báo thời gian thực, đến kiểm tra hộp thư thông báo) ngay trên giao diện Swagger/Browser?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Hội đồng, em xin demo luồng 4 bước liên hoàn trong 2 phút trên Swagger UI (`/api/docs`) và trình duyệt:  
+  > 1. **Cấp Stream Ticket**: Đăng nhập tài khoản `officer@ppe.local` (Safety Officer), gọi `POST /api/v1/notifications/stream-ticket` để nhận Ticket tạm thời có hiệu lực 60 giây.  
+  > 2. **Mở kênh lắng nghe SSE**: Mở tab trình duyệt mới truy cập `GET /api/v1/notifications/stream?ticket=<ticket>`, màn hình hiển thị kết nối `text/event-stream` sống và nhận sự kiện `connected` với `clientId`.  
+  > 3. **Mô phỏng vi phạm tức thời**: Tại tab Incident trên Swagger, gọi `POST /api/v1/incidents` tạo vi phạm `NO_HELMET` mức độ `HIGH`. Ngay lập tức tab SSE bên cạnh nhận được gói tin JSON `incident_notification` thời gian thực mà không cần tải lại trang.  
+  > 4. **Quản lý Inbox & Đánh dấu đã đọc**: Gọi `GET /api/v1/notifications/my` để thấy thông báo mới trong hòm thư, sau đó gọi `PATCH /api/v1/notifications/{id}/read` để cập nhật trạng thái `READ`, chứng minh quy trình khép kín hoàn hảo từ lúc phát hiện đến lúc cán bộ an toàn xử lý."*
+
+---
+
+## 🛠️ 9. CHECKLIST CHUẨN BỊ TRƯỚC GIỜ BẢO VỆ
 
 - [ ] **Môi trường máy tính**:
   - Đã nạp sẵn Docker images (`postgres:16-alpine`, `confluentinc/cp-kafka:7.5.0`, `provectuslabs/kafka-ui`, `minio/minio`).
-  - Kiểm tra các cổng không bị xung đột: Postgres (5433), Kafka (9092), Kafka UI (8088), MinIO (9000 / 9001), API Gateway Traefik (80/443), Monolith App API (9999), Site Service (8891), Camera Service (8892).
+  - Kiểm tra các cổng không bị xung đột: Postgres (5433), Kafka (9092), Kafka UI (8088), MinIO (9000 / 9001), API Gateway Traefik (80/443), Monolith App API (9999), Site Service (8891), Camera Service (8892), Incident Service (8893), Notification Service (8894).
+- [ ] **Tài khoản Demo chuẩn PPE (Database Seeded)**:
+  - `admin@ppe.local` / `Admin@123456` (`ADMIN`)
+  - `manager@ppe.local` / `Manager@123456` (`SAFETY_MANAGER`)
+  - `officer@ppe.local` / `Officer@123456` (`SAFETY_OFFICER`)
 - [ ] **Tài liệu & Trình duyệt chuẩn bị sẵn các tab**:
   - Tab 1: Slide thuyết trình (Canva / PowerPoint).
   - Tab 2: Swagger UI (`http://localhost:8888/api/docs` hoặc cổng `app-api` :9999).
   - Tab 3: Kafka UI (`http://localhost:8088` - sẵn sàng ở topic `ppe.violation.detected`).
-  - Tab 4: MinIO Console (`http://localhost:9001` - bucket `ppe-evidence`).
+  - Tab 4: MinIO Console (`http://localhost:9001` - bucket `ppe-evidences`).
   - Tab 5: Traefik Dashboard (`http://localhost:8080` - routers & services status).
 - [ ] **Terminal chuẩn bị sẵn**:
   - Cửa sổ 1: Đang chạy `docker compose -f docker-compose.infra.yml ps`.
   - Cửa sổ 2: Thư mục dự án sẵn sàng gõ `pnpm test`.
+

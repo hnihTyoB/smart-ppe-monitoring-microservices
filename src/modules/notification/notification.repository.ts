@@ -1,13 +1,21 @@
-import { Prisma } from "@prisma/client";
+import { Prisma as NotificationPrisma } from "@prisma/client-notification";
+import { Prisma as IdentityPrisma } from "@prisma/client";
 import {
-  prisma,
-  DEFAULT_TRANSACTION_OPTIONS,
+  notificationPrisma,
+  DEFAULT_NOTIFICATION_TRANSACTION_OPTIONS,
+} from "../../database/notification.client";
+import {
+  prisma as identityPrisma,
+  DEFAULT_TRANSACTION_OPTIONS as DEFAULT_IDENTITY_TRANSACTION_OPTIONS,
 } from "../../database/prisma.client";
-import { SYSTEM_TARGET_ID } from "../../common/constants/audit-log.constant";
 import {
-  EMAIL_MAX_ATTEMPTS,
+  NOTIFICATION_TYPE,
+  NOTIFICATION_STATUS,
+  NOTIFICATION_SEVERITY,
+  NOTIFICATION_CHANNEL,
+  NOTIFICATION_TEMPLATE_STATUS,
   EMAIL_STATUS,
-  NOTIFICATION_PRIORITY,
+  EMAIL_MAX_ATTEMPTS,
 } from "../../common/constants/notification.constant";
 import {
   calculatePaginationSkip,
@@ -20,6 +28,7 @@ import {
   ListNotificationTemplatesDto,
   CreateNotificationTemplateDto,
   UpdateNotificationTemplateDto,
+  NotificationItemDto,
 } from "./notification.dto";
 
 export interface ClaimedEmailRecord {
@@ -38,177 +47,384 @@ export interface ClaimedEmailRecord {
 }
 
 export class NotificationRepository {
-  async findMany(userId: string, dto: ListNotificationsDto) {
-    const { isRead, type } = dto;
-    const { skip, take } = calculatePaginationSkip(dto.page, dto.limit);
+  private readonly db = notificationPrisma;
 
-    const where = {
+  // ─────────────────────────────────────────────
+  // User Notifications Inbox (ppe_notification_db)
+  // ─────────────────────────────────────────────
+
+  async findMany(userId: string, dto: ListNotificationsDto) {
+    const { isRead, status, severity, channel, incidentId, fromDate, toDate } = dto;
+    const { skip, take, page, limit } = calculatePaginationSkip(dto.page, dto.limit);
+
+    const where: NotificationPrisma.NotificationWhereInput = {
       userId,
-      ...(isRead !== undefined && { isRead }),
-      ...(type && { type }),
     };
 
-    return prisma.$transaction([
-      prisma.notification.findMany({
+    if (isRead !== undefined) {
+      if (isRead) {
+        where.status = NOTIFICATION_STATUS.READ;
+      } else {
+        where.status = { not: NOTIFICATION_STATUS.READ };
+      }
+    }
+
+    if (status) {
+      where.status = status;
+    }
+
+    if (severity) {
+      where.severity = severity;
+    }
+
+    if (channel) {
+      where.channel = channel;
+    }
+
+    if (incidentId) {
+      where.incidentId = incidentId;
+    }
+
+    if (fromDate || toDate) {
+      where.createdAt = {};
+      if (fromDate) {
+        where.createdAt.gte = new Date(fromDate);
+      }
+      if (toDate) {
+        where.createdAt.lte = new Date(toDate);
+      }
+    }
+
+    const [items, total] = await Promise.all([
+      this.db.notification.findMany({
         where,
         orderBy: { createdAt: "desc" },
         skip,
         take,
-        select: {
-          id: true,
-          type: true,
-          priority: true,
-          title: true,
-          content: true,
-          actionUrl: true,
-          metadata: true,
-          isRead: true,
-          readAt: true,
-          createdAt: true,
+        include: {
+          template: {
+            select: { id: true, code: true, name: true },
+          },
         },
       }),
-      prisma.notification.count({ where }),
+      this.db.notification.count({ where }),
     ]);
+
+    const formattedItems: NotificationItemDto[] = items.map((item) => ({
+      id: item.id,
+      userId: item.userId,
+      incidentId: item.incidentId,
+      templateId: item.templateId,
+      channel: item.channel,
+      title: item.title,
+      content: item.content,
+      severity: item.severity,
+      status: item.status,
+      sentAt: item.sentAt,
+      readAt: item.readAt,
+      createdAt: item.createdAt,
+      isRead: item.status === NOTIFICATION_STATUS.READ || Boolean(item.readAt),
+      priority: item.severity,
+      type:
+        item.severity === NOTIFICATION_SEVERITY.CRITICAL
+          ? NOTIFICATION_TYPE.ALERT
+          : NOTIFICATION_TYPE.INFO,
+    }));
+
+    return [formattedItems, total, formatPaginationMeta(page, limit, total)] as const;
   }
 
-  countUnread(userId: string) {
-    return prisma.notification.count({ where: { userId, isRead: false } });
-  }
-
-  findOne(id: string, userId: string) {
-    return prisma.notification.findFirst({ where: { id, userId } });
-  }
-
-  markAsRead(id: string, userId: string) {
-    return prisma.notification.updateMany({
-      where: { id, userId, isRead: false },
-      data: { isRead: true, readAt: new Date() },
+  async countUnread(userId: string): Promise<number> {
+    return this.db.notification.count({
+      where: {
+        userId,
+        status: { not: NOTIFICATION_STATUS.READ },
+      },
     });
   }
 
-  markAllAsRead(userId: string) {
-    return prisma.notification.updateMany({
-      where: { userId, isRead: false },
-      data: { isRead: true, readAt: new Date() },
+  async findOne(id: string, userId?: string) {
+    const where: NotificationPrisma.NotificationWhereInput = { id };
+    if (userId) {
+      where.userId = userId;
+    }
+    return this.db.notification.findFirst({
+      where,
+      include: {
+        template: true,
+        logs: {
+          orderBy: { createdAt: "desc" },
+          take: 5,
+        },
+      },
     });
   }
 
-  delete(id: string, userId: string) {
-    return prisma.notification.deleteMany({ where: { id, userId } });
+  async markAsRead(id: string, userId: string) {
+    return this.db.notification.updateMany({
+      where: {
+        id,
+        userId,
+        status: { not: NOTIFICATION_STATUS.READ },
+      },
+      data: {
+        status: NOTIFICATION_STATUS.READ,
+        readAt: new Date(),
+      },
+    });
   }
 
-  createSingleNotification(data: {
+  async markAllAsRead(userId: string) {
+    return this.db.notification.updateMany({
+      where: {
+        userId,
+        status: { not: NOTIFICATION_STATUS.READ },
+      },
+      data: {
+        status: NOTIFICATION_STATUS.READ,
+        readAt: new Date(),
+      },
+    });
+  }
+
+  async delete(id: string, userId: string) {
+    return this.db.notification.deleteMany({
+      where: { id, userId },
+    });
+  }
+
+  async createSingleNotification(data: {
     userId: string;
-    type: string;
-    priority?: string;
+    incidentId?: string | null;
+    templateId?: string | null;
+    channel?: string;
     title: string;
     content: string;
-    actionUrl?: string | null;
-    metadata?: any;
+    severity?: string;
+    status?: string;
+    sentAt?: Date | null;
   }) {
     if (!data.userId || !isUuid(data.userId)) {
-      return Promise.resolve(null as any);
+      return null;
     }
-    return prisma.notification.create({
+
+    return this.db.notification.create({
       data: {
         userId: data.userId,
-        type: data.type,
-        priority: data.priority ?? NOTIFICATION_PRIORITY.NORMAL,
+        incidentId: data.incidentId || null,
+        templateId: data.templateId || null,
+        channel: data.channel || NOTIFICATION_CHANNEL.IN_APP,
         title: data.title,
         content: data.content,
-        actionUrl: data.actionUrl ?? null,
-        metadata: data.metadata ?? null,
+        severity: data.severity || NOTIFICATION_SEVERITY.NORMAL,
+        status: data.status || NOTIFICATION_STATUS.SENT,
+        sentAt: data.sentAt || new Date(),
       },
     });
   }
 
-  createSingleEmailNotification(data: {
-    userId?: string | null;
-    toEmail: string;
-    subject: string;
-    templateKey: string;
-    templateData: any;
-    status?: string;
-  }) {
-    const validUserId = data.userId && isUuid(data.userId) ? data.userId : null;
-    return prisma.emailNotification.create({
+  async createManyNotifications(
+    dataList: Array<{
+      userId: string;
+      incidentId?: string | null;
+      templateId?: string | null;
+      channel: string;
+      title: string;
+      content: string;
+      severity?: string;
+      status?: string;
+      sentAt?: Date | null;
+    }>,
+  ) {
+    const validData = dataList
+      .filter((d) => d.userId && isUuid(d.userId))
+      .map((d) => ({
+        userId: d.userId,
+        incidentId: d.incidentId || null,
+        templateId: d.templateId || null,
+        channel: d.channel || NOTIFICATION_CHANNEL.IN_APP,
+        title: d.title,
+        content: d.content,
+        severity: d.severity || NOTIFICATION_SEVERITY.NORMAL,
+        status: d.status || NOTIFICATION_STATUS.SENT,
+        sentAt: d.sentAt || new Date(),
+      }));
+
+    if (validData.length === 0) return { count: 0 };
+
+    return this.db.notification.createMany({
+      data: validData,
+    });
+  }
+
+  // ─────────────────────────────────────────────
+  // User Notification Preferences
+  // ─────────────────────────────────────────────
+
+  async findUserPreferences(userId: string) {
+    return this.db.notificationPreference.findMany({
+      where: { userId },
+    });
+  }
+
+  async findPreferencesByUserIds(userIds: string[]) {
+    if (userIds.length === 0) return [];
+    return this.db.notificationPreference.findMany({
+      where: { userId: { in: userIds } },
+    });
+  }
+
+  async findUserPreferenceForChannel(userId: string, channel: string) {
+    return this.db.notificationPreference.findUnique({
+      where: {
+        userId_channel: {
+          userId,
+          channel,
+        },
+      },
+    });
+  }
+
+  async upsertPreference(
+    userId: string,
+    channel: string,
+    enabled: boolean,
+    severityThreshold: string = NOTIFICATION_SEVERITY.LOW,
+  ) {
+    return this.db.notificationPreference.upsert({
+      where: {
+        userId_channel: {
+          userId,
+          channel,
+        },
+      },
+      create: {
+        userId,
+        channel,
+        enabled,
+        severityThreshold,
+      },
+      update: {
+        enabled,
+        severityThreshold,
+      },
+    });
+  }
+
+  // ─────────────────────────────────────────────
+  // Notification Templates (ppe_notification_db)
+  // ─────────────────────────────────────────────
+
+  async findTemplateByCode(code: string) {
+    return this.db.notificationTemplate.findUnique({
+      where: { code },
+    });
+  }
+
+  async findTemplateById(id: string) {
+    return this.db.notificationTemplate.findUnique({
+      where: { id },
+    });
+  }
+
+  async findTemplates(dto: ListNotificationTemplatesDto) {
+    const { skip, take, page, limit } = calculatePaginationSkip(dto.page, dto.limit);
+    const where: NotificationPrisma.NotificationTemplateWhereInput = {};
+
+    if (dto.channel) {
+      where.channel = dto.channel;
+    }
+    if (dto.status) {
+      where.status = dto.status;
+    }
+    if (dto.search) {
+      where.OR = [
+        { code: { contains: dto.search, mode: "insensitive" } },
+        { name: { contains: dto.search, mode: "insensitive" } },
+      ];
+    }
+
+    const [items, total] = await Promise.all([
+      this.db.notificationTemplate.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip,
+        take,
+      }),
+      this.db.notificationTemplate.count({ where }),
+    ]);
+
+    return {
+      data: items,
+      meta: formatPaginationMeta(page, limit, total),
+    };
+  }
+
+  async createTemplate(data: CreateNotificationTemplateDto) {
+    return this.db.notificationTemplate.create({
       data: {
-        userId: validUserId,
-        toEmail: data.toEmail,
-        subject: data.subject,
-        templateKey: data.templateKey,
-        templateData: data.templateData,
-        status: data.status ?? EMAIL_STATUS.PENDING,
+        code: data.code,
+        name: data.name,
+        channel: data.channel || (data.channels?.[0] as string) || NOTIFICATION_CHANNEL.IN_APP,
+        subjectTemplate: data.subjectTemplate || data.subject || null,
+        contentTemplate: data.contentTemplate || data.content || "",
+        status:
+          data.status ||
+          (data.isActive === false
+            ? NOTIFICATION_TEMPLATE_STATUS.INACTIVE
+            : NOTIFICATION_TEMPLATE_STATUS.ACTIVE),
       },
     });
   }
 
-  createManyNotifications(
-    data: Array<{
-      userId: string;
-      type: string;
-      priority: string;
-      title: string;
-      content: string;
-      actionUrl?: string | null;
-      metadata?: any;
-    }>,
-  ) {
-    return prisma.notification.createMany({ data });
+  async updateTemplate(id: string, data: UpdateNotificationTemplateDto) {
+    return this.db.notificationTemplate.update({
+      where: { id },
+      data: {
+        ...(data.name && { name: data.name }),
+        ...(data.channel && { channel: data.channel }),
+        ...(data.subjectTemplate !== undefined && {
+          subjectTemplate: data.subjectTemplate,
+        }),
+        ...(data.contentTemplate && { contentTemplate: data.contentTemplate }),
+        ...(data.status && { status: data.status }),
+      },
+    });
   }
 
-  createManyEmailNotifications(
-    data: Array<{
-      userId?: string | null;
-      toEmail: string;
-      subject: string;
-      templateKey: string;
-      templateData: any;
-      status: string;
-    }>,
-  ) {
-    const formattedData = data.map((d) => ({
-      ...d,
-      userId: d.userId && isUuid(d.userId) ? d.userId : null,
-    }));
-    return prisma.emailNotification.createMany({ data: formattedData });
+  async deleteTemplate(id: string) {
+    return this.db.notificationTemplate.delete({
+      where: { id },
+    });
   }
 
-  createMultiChannelNotifications(
-    webData: Array<{
-      userId: string;
-      type: string;
-      priority: string;
-      title: string;
-      content: string;
-      actionUrl?: string | null;
-      metadata?: any;
-    }>,
-    emailData: Array<{
-      userId?: string | null;
-      toEmail: string;
-      subject: string;
-      templateKey: string;
-      templateData: any;
-      status: string;
-    }>,
+  // ─────────────────────────────────────────────
+  // Notification Logs
+  // ─────────────────────────────────────────────
+
+  async logNotificationAttempt(
+    notificationId: string,
+    status: string,
+    attempt: number = 1,
+    errorMessage?: string | null,
   ) {
-    const formattedEmailData = emailData.map((d) => ({
-      ...d,
-      userId: d.userId && isUuid(d.userId) ? d.userId : null,
-    }));
-    return prisma.$transaction(async (tx) => {
-      if (webData.length > 0) {
-        await tx.notification.createMany({ data: webData });
-      }
-      if (formattedEmailData.length > 0) {
-        await tx.emailNotification.createMany({ data: formattedEmailData });
-      }
-    }, DEFAULT_TRANSACTION_OPTIONS);
+    return this.db.notificationLog.create({
+      data: {
+        notificationId,
+        status,
+        attempt,
+        errorMessage: errorMessage || null,
+        sentAt: status === NOTIFICATION_STATUS.SENT ? new Date() : null,
+      },
+    });
   }
+
+  // ─────────────────────────────────────────────
+  // Email Worker Legacy Support (identityPrisma)
+  // ─────────────────────────────────────────────
 
   async claimPendingEmails(batchSize = 20): Promise<ClaimedEmailRecord[]> {
-    return prisma.$queryRaw<ClaimedEmailRecord[]>`
+    return identityPrisma.$queryRaw<ClaimedEmailRecord[]>`
       UPDATE email_notifications
       SET status = ${EMAIL_STATUS.PROCESSING}, updated_at = NOW()
       WHERE id IN (
@@ -238,7 +454,7 @@ export class NotificationRepository {
     `;
   }
 
-  updateEmailStatus(
+  async updateEmailStatus(
     id: string,
     data: {
       status: string;
@@ -247,46 +463,47 @@ export class NotificationRepository {
       sentAt?: Date | null;
     },
   ) {
-    return prisma.emailNotification.update({
+    return identityPrisma.emailNotification.update({
       where: { id },
-      data,
+      data: {
+        status: data.status,
+        ...(data.attempts !== undefined && { attempts: data.attempts }),
+        ...(data.lastError !== undefined && { lastError: data.lastError }),
+        ...(data.sentAt !== undefined && { sentAt: data.sentAt }),
+      },
+    });
+  }
+
+  async findEmailById(id: string) {
+    return identityPrisma.emailNotification.findUnique({
+      where: { id },
     });
   }
 
   async findEmails(dto: ListEmailsDto) {
-    const { status, toEmail } = dto;
-    const { skip, take, page: safePage, limit: safeLimit } =
-      calculatePaginationSkip(dto.page, dto.limit);
+    const { skip, take, page, limit } = calculatePaginationSkip(dto.page, dto.limit);
+    const where: IdentityPrisma.EmailNotificationWhereInput = {};
+    if (dto.status) where.status = dto.status;
+    if (dto.toEmail) where.toEmail = { contains: dto.toEmail, mode: "insensitive" };
 
-    const where = {
-      ...(status && { status }),
-      ...(toEmail && {
-        toEmail: { contains: toEmail, mode: "insensitive" as const },
-      }),
-    };
-
-    const [items, total] = await prisma.$transaction([
-      prisma.emailNotification.findMany({
+    const [items, total] = await Promise.all([
+      identityPrisma.emailNotification.findMany({
         where,
         orderBy: { createdAt: "desc" },
         skip,
         take,
       }),
-      prisma.emailNotification.count({ where }),
+      identityPrisma.emailNotification.count({ where }),
     ]);
 
     return {
-      data: items,
-      meta: formatPaginationMeta(safePage, safeLimit, total),
+      data: items as ClaimedEmailRecord[],
+      meta: formatPaginationMeta(page, limit, total),
     };
   }
 
-  findEmailById(id: string) {
-    return prisma.emailNotification.findUnique({ where: { id } });
-  }
-
-  resetEmailForRetry(id: string) {
-    return prisma.emailNotification.update({
+  async resetEmailForRetry(id: string) {
+    return identityPrisma.emailNotification.update({
       where: { id },
       data: {
         status: EMAIL_STATUS.PENDING,
@@ -296,112 +513,32 @@ export class NotificationRepository {
     });
   }
 
-  // ─────────────────────────────────────────────
-  // Template Repository Methods
-  // ─────────────────────────────────────────────
-
-  async findTemplates(dto: ListNotificationTemplatesDto) {
-    const { isActive, search, channel } = dto;
-    const { skip, take, page: safePage, limit: safeLimit } =
-      calculatePaginationSkip(dto.page, dto.limit);
-
-    const where: Prisma.NotificationTemplateWhereInput = {
-      ...(isActive !== undefined && { isActive }),
-      ...(channel && { channels: { array_contains: channel } }),
-      ...(search && {
-        OR: [
-          { code: { contains: search, mode: "insensitive" } },
-          { name: { contains: search, mode: "insensitive" } },
-          { description: { contains: search, mode: "insensitive" } },
-        ],
-      }),
-    };
-
-    const [data, total] = await prisma.$transaction([
-      prisma.notificationTemplate.findMany({
-        where,
-        orderBy: [{ isSystem: "desc" }, { createdAt: "desc" }],
-        skip,
-        take,
-      }),
-      prisma.notificationTemplate.count({ where }),
-    ]);
-
-    return {
-      data,
-      meta: formatPaginationMeta(safePage, safeLimit, total),
-    };
-  }
-
-  findTemplateByCode(code: string) {
-    return prisma.notificationTemplate.findUnique({ where: { code } });
-  }
-
-  findTemplateById(id: string) {
-    return prisma.notificationTemplate.findUnique({ where: { id } });
-  }
-
-  createTemplate(data: CreateNotificationTemplateDto) {
-    return prisma.notificationTemplate.create({
-      data: {
-        code: data.code,
-        name: data.name,
-        description: data.description,
-        channels: data.channels as any,
-        subject: data.subject,
-        title: data.title,
-        content: data.content,
-        variables: data.variables as any,
-        isSystem: false,
-        isActive: data.isActive ?? true,
-      },
-    });
-  }
-
-  updateTemplate(id: string, data: UpdateNotificationTemplateDto) {
-    return prisma.notificationTemplate.update({
-      where: { id },
-      data: {
-        ...(data.name !== undefined && { name: data.name }),
-        ...(data.description !== undefined && {
-          description: data.description,
-        }),
-        ...(data.channels !== undefined && { channels: data.channels as any }),
-        ...(data.subject !== undefined && { subject: data.subject }),
-        ...(data.title !== undefined && { title: data.title }),
-        ...(data.content !== undefined && { content: data.content }),
-        ...(data.variables !== undefined && {
-          variables: data.variables as any,
-        }),
-        ...(data.isActive !== undefined && { isActive: data.isActive }),
-      },
-    });
-  }
-
-  deleteTemplate(id: string) {
-    return prisma.notificationTemplate.delete({ where: { id } });
-  }
-
-  createAuditLog(data: {
+  async createAuditLog(params: {
     actorId?: string;
     action: string;
     targetType: string;
     targetId?: string;
-    details?: Record<string, unknown> | null;
+    details?: Record<string, unknown>;
     ipAddress?: string;
     userAgent?: string;
   }) {
-    return prisma.auditLog.create({
-      data: {
-        actorId: data.actorId,
-        action: data.action,
-        targetType: data.targetType,
-        targetId: data.targetId || SYSTEM_TARGET_ID,
-        details: (data.details as any) || null,
-        ipAddress: data.ipAddress,
-        userAgent: data.userAgent,
-      },
-    });
+    if (!params.actorId || !isUuid(params.actorId)) return null;
+    try {
+      return await identityPrisma.auditLog.create({
+        data: {
+          actorId: params.actorId,
+          action: params.action,
+          targetType: params.targetType,
+          targetId: params.targetId || "",
+          details: (params.details as any) || undefined,
+          ipAddress: params.ipAddress || null,
+          userAgent: params.userAgent || null,
+        },
+      });
+    } catch (err: any) {
+      console.warn("[AuditLog] Failed to record event:", err?.message || err);
+      return null;
+    }
   }
 }
 

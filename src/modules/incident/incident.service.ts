@@ -6,6 +6,10 @@ import {
   EvidenceStorageService,
   evidenceStorageService,
 } from "../../common/services/evidence-storage.service";
+import {
+  NotificationService,
+  notificationService,
+} from "../notification/notification.service";
 import { imageProcessingService } from "../../common/services/image-processing.service";
 import { AppError } from "../../common/errors/app-error";
 import { ERROR_CODE } from "../../common/errors/error-code";
@@ -37,18 +41,41 @@ import {
 export class IncidentService {
   private readonly repository: IncidentRepository;
   private readonly storage: EvidenceStorageService;
+  private readonly notification: NotificationService;
 
   constructor(
     repository?: IncidentRepository,
     storage?: EvidenceStorageService,
+    notification?: NotificationService,
   ) {
     this.repository = repository || incidentRepository;
     this.storage = storage || evidenceStorageService;
+    this.notification = notification || notificationService;
   }
 
   // ── Incident CRUD Operations ───────────────────────────────────────────────
   async createIncident(data: CreateIncidentDto, actorId: string) {
-    return this.repository.createIncident(data, actorId);
+    const created = await this.repository.createIncident(data, actorId);
+
+    // Tự động phát thông báo sự cố vi phạm PPE cho cán bộ an toàn (Task BE-08)
+    this.notification
+      .dispatchIncidentNotification({
+        incidentId: created.id,
+        siteId: created.siteId,
+        cameraId: created.cameraId,
+        violationType: created.violationType,
+        severity: created.severity,
+        description: created.description || undefined,
+        detectedAt: created.detectedAt,
+      })
+      .catch((err) => {
+        console.warn(
+          "[IncidentService] Không thể tự động phát thông báo sự cố:",
+          err?.message || err,
+        );
+      });
+
+    return created;
   }
 
   async getIncidentById(id: string) {

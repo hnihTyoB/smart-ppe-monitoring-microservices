@@ -13,6 +13,8 @@ import {
   listEmailsSchema,
   emailIdParamSchema,
   testSendNotificationTemplateSchema,
+  updateNotificationPreferenceSchema,
+  dispatchIncidentNotificationSchema,
 } from "./notification.validation";
 import { z } from "zod";
 
@@ -21,6 +23,14 @@ export function registerNotificationOpenApi(): void {
   openapiRegistry.register(
     "BroadcastNotificationRequest",
     broadcastNotificationSchema,
+  );
+  openapiRegistry.register(
+    "UpdateNotificationPreferenceRequest",
+    updateNotificationPreferenceSchema,
+  );
+  openapiRegistry.register(
+    "DispatchIncidentNotificationRequest",
+    dispatchIncidentNotificationSchema,
   );
   openapiRegistry.register(
     "CreateTemplateRequest",
@@ -560,15 +570,111 @@ export function registerNotificationOpenApi(): void {
         content: {
           "application/json": {
             schema: z.object({
-              success: z.boolean().openapi({ example: true }),
-              message: z
-                .string()
-                .openapi({ example: "Email scheduled for retry" }),
+               success: z.boolean().openapi({ example: true }),
+               message: z
+                 .string()
+                 .openapi({ example: "Email scheduled for retry" }),
             }),
           },
         },
       },
       404: { description: "Không tìm thấy email" },
+    },
+  });
+
+  // ── PPE Incident Notification & Preferences ──────────────────────────────────
+
+  // GET /notifications/preferences
+  openapiRegistry.registerPath({
+    method: "get",
+    path: "/notifications/preferences",
+    tags: ["Notification Preferences"],
+    summary: "Xem cấu hình kênh nhận thông báo cá nhân (In-App, Email, ngưỡng severity)",
+    security: [{ BearerAuth: [] }],
+    responses: {
+      200: {
+        description: "Lấy cấu hình kênh nhận thông báo thành công",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.array(
+                z.object({
+                  id: z.string().uuid(),
+                  userId: z.string().uuid(),
+                  channel: z.string(),
+                  enabled: z.boolean(),
+                  severityThreshold: z.string(),
+                }),
+              ),
+            }),
+          },
+        },
+      },
+    },
+  });
+
+  // PUT /notifications/preferences
+  openapiRegistry.registerPath({
+    method: "put",
+    path: "/notifications/preferences",
+    tags: ["Notification Preferences"],
+    summary: "Cập nhật cấu hình kênh nhận thông báo cá nhân",
+    security: [{ BearerAuth: [] }],
+    request: {
+      body: {
+        content: {
+          "application/json": { schema: updateNotificationPreferenceSchema },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description: "Cập nhật cấu hình kênh nhận thông báo thành công",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              message: z.string(),
+              data: z.any(),
+            }),
+          },
+        },
+      },
+    },
+  });
+
+  // POST /notifications/trigger-incident
+  openapiRegistry.registerPath({
+    method: "post",
+    path: "/notifications/trigger-incident",
+    tags: ["PPE Incident Notifications"],
+    summary: "Kích hoạt phát cảnh báo sự cố vi phạm PPE cho cán bộ an toàn (D08.pdf)",
+    security: [{ BearerAuth: [] }],
+    request: {
+      body: {
+        content: {
+          "application/json": { schema: dispatchIncidentNotificationSchema },
+        },
+      },
+    },
+    responses: {
+      201: {
+        description: "Phát cảnh báo sự cố vi phạm PPE thành công",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              message: z.string(),
+              data: z.object({
+                incidentId: z.string(),
+                dispatchedCount: z.number(),
+                channels: z.array(z.string()),
+              }),
+            }),
+          },
+        },
+      },
     },
   });
 }

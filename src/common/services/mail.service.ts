@@ -4,6 +4,7 @@ import { envConfig } from "../../config/env.config";
 import { mailConfig } from "../../config/mail.config";
 import { formatVietnamDateTime } from "../helpers/date.helper";
 import { escapeHtml } from "../helpers/template.helper";
+import { NOTIFICATION_SEVERITY } from "../constants/notification.constant";
 
 // Force IPv4-first resolution in Node.js runtime to prevent ENETUNREACH on platforms without IPv6 routing (e.g. Render, Railway, Docker)
 try {
@@ -526,6 +527,94 @@ export class MailService {
       throw error;
     }
   }
+
+  /**
+   * Gửi Email cảnh báo vi phạm trang bị bảo hộ PPE cho cán bộ an toàn (D08.pdf)
+   */
+  async sendPpeViolationAlertEmail(
+    to: string,
+    data: {
+      incidentId: string;
+      violationType: string;
+      severity: string;
+      cameraCode?: string;
+      siteName?: string;
+      detectedAt?: Date | string;
+      evidenceUrl?: string;
+      description?: string;
+    },
+  ): Promise<void> {
+    const formattedDate = formatVietnamDateTime(
+      data.detectedAt instanceof Date ? data.detectedAt : new Date(data.detectedAt || Date.now()),
+    );
+    const severityColor =
+      data.severity === NOTIFICATION_SEVERITY.CRITICAL
+        ? "#e11d48"
+        : data.severity === NOTIFICATION_SEVERITY.HIGH
+          ? "#ea580c"
+          : data.severity === NOTIFICATION_SEVERITY.MEDIUM
+            ? "#d97706"
+            : "#2563eb";
+
+    const subject = `🚨 [${data.severity}] Cảnh báo vi phạm PPE: ${data.violationType} - ${data.siteName || "Công trường"}`;
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;">
+        <div style="background-color: ${severityColor}; color: white; padding: 15px; border-radius: 6px; text-align: center; margin-bottom: 20px;">
+          <h2 style="margin: 0; font-size: 20px;">🚨 CẢNH BÁO VI PHẠM TRANG BỊ BẢO HỘ PPE</h2>
+          <p style="margin: 5px 0 0 0; font-size: 14px; opacity: 0.9;">Mức độ nghiêm trọng: <strong>${escapeHtml(data.severity)}</strong></p>
+        </div>
+
+        <p style="font-size: 15px; color: #334155;">Kính gửi Cán bộ An toàn Lao động,</p>
+        <p style="font-size: 14px; color: #475569; line-height: 1.6;">
+          Hệ thống giám sát Smart PPE Monitoring vừa phát hiện sự cố vi phạm quy chuẩn an toàn lao động tại khu vực giám sát:
+        </p>
+
+        <table style="width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 14px;">
+          <tr style="background-color: #f8fafc; border-bottom: 1px solid #e2e8f0;">
+            <td style="padding: 10px; font-weight: bold; width: 35%; color: #475569;">Loại vi phạm:</td>
+            <td style="padding: 10px; color: #0f172a; font-weight: bold;">${escapeHtml(data.violationType)}</td>
+          </tr>
+          <tr style="border-bottom: 1px solid #e2e8f0;">
+            <td style="padding: 10px; font-weight: bold; color: #475569;">Công trường:</td>
+            <td style="padding: 10px; color: #0f172a;">${escapeHtml(data.siteName || "Công trường chính")}</td>
+          </tr>
+          <tr style="background-color: #f8fafc; border-bottom: 1px solid #e2e8f0;">
+            <td style="padding: 10px; font-weight: bold; color: #475569;">Vị trí Camera:</td>
+            <td style="padding: 10px; color: #0f172a;">${escapeHtml(data.cameraCode || "CAM-DEFAULT")}</td>
+          </tr>
+          <tr style="border-bottom: 1px solid #e2e8f0;">
+            <td style="padding: 10px; font-weight: bold; color: #475569;">Thời điểm phát hiện:</td>
+            <td style="padding: 10px; color: #0f172a;">${escapeHtml(formattedDate)}</td>
+          </tr>
+          ${
+            data.description
+              ? `<tr style="background-color: #f8fafc; border-bottom: 1px solid #e2e8f0;">
+                   <td style="padding: 10px; font-weight: bold; color: #475569;">Chi tiết:</td>
+                   <td style="padding: 10px; color: #0f172a;">${escapeHtml(data.description)}</td>
+                 </tr>`
+              : ""
+          }
+        </table>
+
+        ${
+          data.evidenceUrl
+            ? `<div style="text-align: center; margin: 25px 0;">
+                 <img src="${escapeHtml(data.evidenceUrl)}" alt="Hình ảnh bằng chứng" style="max-width: 100%; height: auto; border-radius: 6px; border: 1px solid #cbd5e1;" />
+                 <p style="font-size: 12px; color: #64748b; margin-top: 5px;">Hình ảnh bằng chứng trích xuất từ AI Vision</p>
+               </div>`
+            : ""
+        }
+
+        <p style="font-size: 13px; color: #64748b; margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 15px;">
+          Email này được gửi tự động từ <strong>Hệ thống Giám sát An toàn Công trường Thông minh Smart PPE Monitoring</strong>. Vui lòng đăng nhập hệ thống để xác nhận hoặc phân công xử lý sự cố.
+        </p>
+      </div>
+    `;
+
+    await this.sendRaw(to, subject, html);
+  }
 }
 
 export const mailService = new MailService();
+

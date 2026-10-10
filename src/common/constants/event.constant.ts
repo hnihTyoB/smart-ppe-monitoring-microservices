@@ -14,8 +14,10 @@ export const EVENT_NAMES = {
   USER_SOFT_DELETED: "user.soft_deleted",
   FILE_UPLOADED_UNCONFIRMED: "file.uploaded_unconfirmed",
 
-  // PPE Domain Kafka Events
+  // PPE Domain Kafka & EventBus Events
   PPE_VIOLATION_DETECTED: "ppe.violation.detected",
+  PPE_INCIDENT_CREATED: "ppe.incident.created",
+  PPE_INCIDENT_ASSIGNED: "ppe.incident.assigned",
   PPE_INCIDENT_RESOLVED: "ppe.incident.resolved",
   PPE_CAMERA_STATUS_CHANGED: "ppe.camera.status_changed",
   PPE_SITE_ALERT_TRIGGERED: "ppe.site.alert_triggered",

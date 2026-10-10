@@ -985,3 +985,38 @@
     - **Memory-Safe Streaming Checksum**: Tối ưu hóa `EvidenceStorageService.verifyChecksum` sử dụng trực tiếp luồng Readable Stream từ S3 pipe vào `crypto.createHash('sha256')`, giữ mức tiêu thụ RAM không đổi $O(1)$ thay vì buffer toàn bộ tệp vào bộ nhớ.
     - **Storage Key Site Integrity**: Ưu tiên sử dụng `incident.siteId` từ CSDL khi sinh khóa `storageKey` trong `requestEvidenceUploadUrl`, hỗ trợ `expiresInSeconds` tùy chỉnh từ client.
     - **Atomic Cleanup Sequence**: Điều chỉnh thứ tự trong `deleteEvidence` thực hiện xóa bản ghi CSDL trước, sau đó mới dọn dẹp đối tượng vật lý trên Object Storage.
+
+- **PPE Microservices: Task BE-08 - Notification Service (2026-10-10)**:
+  - **Mục tiêu**: Hoàn thiện toàn diện module Notification Service theo phân công đồ án PPE Microservices (`BE-08`), đặc tả kiến trúc kỹ thuật `D08.pdf` (Mục 1, 2.7, 3.5, 4.3), và kiến trúc microservices độc lập (`ppe_notification_db`, port 8889).
+  - **1. Acceptance Criteria Cốt lõi & Kích hoạt từ Sự cố**:
+    - `Notification được phát từ incident`: Đáp ứng chuẩn xác tiêu chí nghiệm thu của bảng phân công task.
+    - Tự động kích hoạt thông báo vi phạm PPE đa kênh (`In-App` SSE realtime và `Email`) ngay khi `IncidentService.createIncident` được gọi, thông qua `NotificationService.dispatchIncidentNotification`.
+    - Hỗ trợ endpoint nghiệp vụ `POST /api/v1/notifications/trigger-incident` cho phép AI Vision Pipeline hoặc External Services chủ động kích hoạt phát thông báo sự cố có kiểm soát.
+  - **2. Kênh phát & Chống mệt mỏi cảnh báo (Alert Fatigue Defense)**:
+    - **Realtime In-App qua Server-Sent Events (SSE)**: Cung cấp endpoint SSE `/api/v1/notifications/stream` bảo vệ bằng vé tạm thời ngắn hạn (JWT Ticket 60s qua `POST /api/v1/notifications/stream-ticket`), hỗ trợ tự động duy trì kết nối (heartbeat 30s) và phát tức thời sự kiện vi phạm an toàn tới trình duyệt cán bộ an toàn.
+    - **Email Cảnh báo Chuyên nghiệp**: Nâng cấp `MailService.sendPpeViolationAlertEmail` gửi email định dạng HTML chuẩn an toàn lao động PPE kèm mức độ nghiêm trọng, loại vi phạm, công trường, liên kết bằng chứng và nút điều hướng xử lý sự cố.
+    - **Notification Preferences (Bộ lọc ngưỡng độ nghiêm trọng)**:
+      - Quản lý tùy chọn nhận thông báo của người dùng theo từng kênh (`IN_APP`, `EMAIL`) kèm thuộc tính `severityThreshold` (`LOW`, `NORMAL`, `MEDIUM`, `HIGH`, `CRITICAL`).
+      - Sử dụng bảng trọng số `SEVERITY_WEIGHT` so sánh độ nghiêm trọng của sự cố với ngưỡng cấu hình của từng cán bộ an toàn. Chỉ kích hoạt phát kênh khi `SEVERITY_WEIGHT[incidentSeverity] >= SEVERITY_WEIGHT[channelThreshold]`, triệt tiêu triệt để tình trạng spam hoặc mệt mỏi cảnh báo (Alert Fatigue).
+  - **3. Kiến trúc phân tầng 5 lớp chuẩn mực**:
+    - `notification.constant.ts`: Định nghĩa tập trung `NOTIFICATION_CHANNEL` (`IN_APP`, `EMAIL`), `NOTIFICATION_SEVERITY` (`LOW`, `NORMAL`, `MEDIUM`, `HIGH`, `CRITICAL`), `NOTIFICATION_STATUS` (`UNREAD`, `READ`, `ARCHIVED`), `NOTIFICATION_TEMPLATE_STATUS` (`ACTIVE`, `INACTIVE`), `SEVERITY_WEIGHT`, và `DEFAULT_PREFERENCES`.
+    - `notification.dto.ts`: Định nghĩa toàn bộ interfaces DTO cho Incident Dispatch, Dispatch Result, Preferences, Notification List/Count, Stream Ticket.
+    - `notification.validation.ts`: Zod schema validation chặt chẽ ở biên HTTP (`UUID`, enum checks, threshold validation).
+    - `notification.repository.ts`: Truy vấn độc quyền trên `ppe_notification_db` bằng `notificationPrisma` (`@prisma/client-notification`), tuân thủ tên trường database (`subjectTemplate`, `contentTemplate`, `status`), phân trang chuẩn `calculatePaginationSkip` + `formatPaginationMeta`.
+    - `notification.service.ts`: Xử lý nghiệp vụ phân phối thông báo đa kênh, lọc theo preferences, render template, push SSE event realtime, sinh JWT ticket 60s cho stream.
+    - `notification.controller.ts`: Tiếp nhận HTTP request/response, format dữ liệu chuẩn `{ success: true, data: ..., meta: ... }`, chuyển lỗi sang `next(error)`.
+    - `notification.route.ts`: Mount `/preferences`, `/trigger-incident`, `/unread-count`, `/:id/read`, `/stream-ticket`, `/stream`, bảo vệ bằng dynamic RBAC permissions (`PPE_INCIDENT_READ`, `PPE_INCIDENT_REVIEW`, `PPE_INCIDENT_UPDATE`).
+    - `notification.openapi.ts`: Đăng ký tài liệu OpenAPI 3.0 với `openapiRegistry` và Swagger UI (`/api/docs`).
+  - **4. Standalone Microservice & API Gateway Compatibility**:
+    - `src/notification.app.ts`: Express application độc lập cho Notification Service (:8889) tích hợp Helmet, CORS, Morgan, Request ID, Rate Limiting, Maintenance guard, và Health checks (`/health`, `/api/v1/notifications/health`).
+    - `src/notification.server.ts`: HTTP listener trên cổng 8889 (`NOTIFICATION_PORT`) kèm graceful shutdown an toàn ngắt kết nối `notificationPrisma`.
+    - Khớp 100% với định tuyến Traefik API Gateway (`traefik/dynamic.yml`) router `notifications` (chuyển tiếp `/api/v1/notifications`).
+  - **5. Automated Verification & Code Review Hardening (2026-10-10)**:
+    - **N+1 Database Query Elimination**: Bổ sung `NotificationRepository.findPreferencesByUserIds` và cơ chế gom nhóm in-memory Map trong `NotificationService.dispatchIncidentNotification`, giảm từ $N$ queries xuống còn 1 query database duy nhất khi phát cảnh báo hàng loạt cho cán bộ an toàn.
+    - **Response Synchronization (`dispatchedResult`)**: Khắc phục lỗi `dispatchedResult` mảng rỗng; đồng bộ danh sách thông báo đã phát theo đúng schema `DispatchIncidentNotificationResultDto`.
+    - **SSRF & URL Hardening**: Bổ sung xác thực `isPublicHttpUrl` cho `evidenceUrl` trong `dispatchIncidentNotificationSchema`, ngăn chặn nguy cơ chèn IP nội bộ hoặc URL độc hại vào thẻ ảnh email.
+    - **Preference Fallback Healing**: `getUserPreferences` tự động bổ sung và lưu các kênh mặc định còn thiếu (`DEFAULT_PREFERENCES`) khi người dùng mới chỉ cấu hình một phần kênh.
+    - **Audit Log Error Visibility**: Thay thế nuốt lỗi âm thầm bằng `console.warn` trong `NotificationRepository.createAuditLog`.
+    - **Magic Strings & Type Safety**: Thay thế chuỗi cứng `"ACTIVE"`, `"INACTIVE"`, `"CRITICAL"` bằng hằng số `NOTIFICATION_TEMPLATE_STATUS` và `NOTIFICATION_SEVERITY`; chuẩn hóa `IdentityPrisma.EmailNotificationWhereInput`.
+    - Toàn bộ bộ test `tests/notification-service.test.ts` đạt 19/19 tests PASS (100%), `pnpm build` compile thành công 0 lỗi, `pnpm run lint` sạch 0 warnings / 0 errors.
+

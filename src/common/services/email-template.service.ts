@@ -3,6 +3,7 @@ import { notificationRepository } from "../../modules/notification/notification.
 import {
   EMAIL_TEMPLATE_KEY,
   EmailTemplateKey,
+  NOTIFICATION_TEMPLATE_STATUS,
 } from "../constants/notification.constant";
 import { renderTemplateString } from "../helpers/template.helper";
 import { escapeHtml } from "../helpers/template.helper";
@@ -26,13 +27,13 @@ export class EmailTemplateService {
       const dbTemplate =
         await notificationRepository.findTemplateByCode(templateKey);
 
-      if (dbTemplate && dbTemplate.isActive) {
+      if (dbTemplate && dbTemplate.status === NOTIFICATION_TEMPLATE_STATUS.ACTIVE) {
         const subject = renderTemplateString(
-          dbTemplate.subject || "Thông báo từ hệ thống",
+          dbTemplate.subjectTemplate || dbTemplate.name || "Thông báo từ hệ thống",
           data,
         );
-        const bodyContent = renderTemplateString(dbTemplate.content, data);
-        const html = this.baseLayout(dbTemplate.title || subject, bodyContent);
+        const bodyContent = renderTemplateString(dbTemplate.contentTemplate, data);
+        const html = this.baseLayout(subject, bodyContent);
         return { subject, html };
       }
     } catch (error) {

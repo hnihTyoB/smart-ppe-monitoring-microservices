@@ -64,6 +64,22 @@ import type {
   PPESiteAlertTriggeredPayload,
 } from "./kafka-event.type";
 
+export interface PPEIncidentCreatedPayload {
+  incidentId: string;
+  siteId: string;
+  cameraId: string;
+  violationType: string;
+  severity: string;
+  description?: string;
+  detectedAt: Date | string;
+}
+
+export interface PPEIncidentAssignedPayload {
+  incidentId: string;
+  assignedTo: string;
+  assignedBy?: string;
+}
+
 export interface EventPayloadMap {
   "auth.user_registered": UserRegisteredPayload;
   "auth.verification_requested": VerificationRequestedPayload;
@@ -73,6 +89,8 @@ export interface EventPayloadMap {
   "user.soft_deleted": UserSoftDeletedPayload;
   "file.uploaded_unconfirmed": FileUploadedUnconfirmedPayload;
   "ppe.violation.detected": PPEViolationDetectedPayload;
+  "ppe.incident.created": PPEIncidentCreatedPayload;
+  "ppe.incident.assigned": PPEIncidentAssignedPayload;
   "ppe.incident.resolved": PPEIncidentResolvedPayload;
   "ppe.camera.status_changed": PPECameraStatusChangedPayload;
   "ppe.site.alert_triggered": PPESiteAlertTriggeredPayload;

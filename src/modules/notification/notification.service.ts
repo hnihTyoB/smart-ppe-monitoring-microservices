@@ -7,6 +7,10 @@ import {
   ListNotificationsDto,
   ListNotificationsResponseDto,
   UnreadCountResponseDto,
+  DispatchIncidentNotificationDto,
+  DispatchIncidentNotificationResultDto,
+  NotificationPreferenceDto,
+  UpdateNotificationPreferenceDto,
   SendNotificationDto,
   BroadcastNotificationDto,
   ListEmailsDto,
@@ -19,42 +23,54 @@ import {
   PreviewNotificationTemplateResponseDto,
   TestSendNotificationTemplateDto,
 } from "./notification.dto";
-import { NotificationRepository } from "./notification.repository";
-import { userRepository } from "../users/user.repository";
-import { notificationDispatcher } from "../../common/services/notification-dispatcher.service";
+import { NotificationRepository, notificationRepository } from "./notification.repository";
+import { userRepository, UserRepository } from "../users/user.repository";
+import { mailService, MailService } from "../../common/services/mail.service";
+import { sseManagerService, SseManagerService } from "../../common/services/sse-manager.service";
 import { EmailTemplateService } from "../../common/services/email-template.service";
 import { renderTemplateString } from "../../common/helpers/template.helper";
 import {
   NOTIFICATION_CHANNEL,
-  NOTIFICATION_TYPE,
-  NOTIFICATION_PRIORITY,
+  NOTIFICATION_SEVERITY,
+  NOTIFICATION_STATUS,
+  SEVERITY_WEIGHT,
+  DEFAULT_PREFERENCES,
+  DEFAULT_EMAIL_SUBJECTS,
   EMAIL_STATUS,
   EMAIL_TEMPLATE_KEY,
   NotificationChannel,
-  DEFAULT_EMAIL_SUBJECTS,
+  NotificationSeverity,
 } from "../../common/constants/notification.constant";
 import {
   AUDIT_ACTION,
   AUDIT_TARGET_TYPE,
 } from "../../common/constants/audit-log.constant";
-import { sseManagerService } from "../../common/services/sse-manager.service";
-import {
-  calculatePaginationSkip,
-  formatPaginationMeta,
-} from "../../common/helpers/pagination.helper";
 
 export class NotificationService {
   private readonly repository: NotificationRepository;
+  private readonly userRepo: UserRepository;
+  private readonly mail: MailService;
+  private readonly sse: SseManagerService;
   private readonly emailTemplateService: EmailTemplateService;
 
   constructor(
     repository?: NotificationRepository,
+    userRepo?: UserRepository,
+    mail?: MailService,
+    sse?: SseManagerService,
     emailTemplateService?: EmailTemplateService,
   ) {
-    this.repository = repository || new NotificationRepository();
+    this.repository = repository || notificationRepository;
+    this.userRepo = userRepo || userRepository;
+    this.mail = mail || mailService;
+    this.sse = sse || sseManagerService;
     this.emailTemplateService =
       emailTemplateService || new EmailTemplateService();
   }
+
+  // ─────────────────────────────────────────────
+  // SSE Realtime Stream Ticket & Stream
+  // ─────────────────────────────────────────────
 
   createStreamTicket(user?: {
     id?: string;
@@ -63,7 +79,7 @@ export class NotificationService {
     roleId?: string;
   }): { ticket: string; expiresIn: number } {
     if (!user || !user.id) {
-      throw new AppError("Unauthorized", 401, ERROR_CODE.UNAUTHORIZED);
+      throw new AppError("Chưa xác thực người dùng", 401, ERROR_CODE.UNAUTHORIZED);
     }
 
     const ticket = jwt.sign(
@@ -81,12 +97,209 @@ export class NotificationService {
     return { ticket, expiresIn: 60 };
   }
 
+  // ─────────────────────────────────────────────
+  // PPE Incident Notification Dispatch (BE-08)
+  // ─────────────────────────────────────────────
+
+  /**
+   * Kích hoạt phát cảnh báo thông báo sự cố vi phạm PPE cho cán bộ an toàn (D08.pdf)
+   * Tự động kiểm tra Preferences của từng user, render nội dung và phát đa kênh (Realtime SSE + Email).
+   */
+  async dispatchIncidentNotification(
+    dto: DispatchIncidentNotificationDto,
+  ): Promise<DispatchIncidentNotificationResultDto> {
+    const severity = (dto.severity || NOTIFICATION_SEVERITY.NORMAL).toUpperCase() as NotificationSeverity;
+    const severityWeight = SEVERITY_WEIGHT[severity] || 2;
+
+    // 1. Xác định danh sách người nhận (Safety Officers / Safety Managers)
+    let recipientIds = dto.recipientUserIds || [];
+    if (recipientIds.length === 0) {
+      // Nếu không chỉ định cụ thể, lấy danh sách người dùng active trong hệ thống
+      const activeUsers = await this.userRepo.getActiveUsersChunk(100);
+      recipientIds = activeUsers.map((u) => u.id);
+    }
+
+    if (recipientIds.length === 0) {
+      return {
+        incidentId: dto.incidentId,
+        dispatchedCount: 0,
+        channels: [],
+        notifications: [],
+      };
+    }
+
+    // 2. Tra cứu thông tin người dùng nhận tin để lấy email
+    const users = await this.userRepo.findActiveUsersByIds(recipientIds);
+    const userMap = new Map(users.map((u) => [u.id, u]));
+
+    // 3. Render nội dung cảnh báo vi phạm PPE
+    const title = `🚨 Cảnh báo vi phạm PPE [${severity}]: ${dto.violationType} tại ${dto.siteName || "Công trường"}`;
+    const content =
+      dto.description ||
+      `Phát hiện vi phạm ${dto.violationType} tại vị trí camera ${dto.cameraCode || dto.cameraId || "Chưa xác định"}. Mức độ: ${severity}. Vui lòng kiểm tra và xử lý ngay.`;
+
+    const notificationsToCreate: Array<{
+      userId: string;
+      incidentId: string;
+      templateId: null;
+      channel: string;
+      title: string;
+      content: string;
+      severity: string;
+      status: string;
+      sentAt: Date;
+    }> = [];
+
+    const dispatchedResult: Array<{
+      id: string;
+      userId: string;
+      channel: string;
+      status: string;
+    }> = [];
+
+    const usedChannels = new Set<string>();
+
+    // 4. Lấy cấu hình nhận thông báo hàng loạt cho toàn bộ người nhận (Chống N+1 query)
+    const allPreferences = this.repository.findPreferencesByUserIds
+      ? await this.repository.findPreferencesByUserIds(recipientIds)
+      : (
+          await Promise.all(
+            recipientIds.map(async (id) => {
+              const prefs = await this.repository.findUserPreferences(id);
+              return prefs.map((p) => ({ ...p, userId: (p as any).userId || id }));
+            }),
+          )
+        ).flat();
+    const userPrefMap = new Map<string, Map<string, (typeof allPreferences)[number]>>();
+    for (const pref of allPreferences) {
+      const uId = (pref as any).userId || (recipientIds.length === 1 ? recipientIds[0] : undefined);
+      if (uId) {
+        if (!userPrefMap.has(uId)) {
+          userPrefMap.set(uId, new Map());
+        }
+        userPrefMap.get(uId)!.set(pref.channel, pref);
+      }
+    }
+
+    // 5. Lặp qua từng người nhận và áp dụng Preferences
+    for (const userId of recipientIds) {
+      const user = userMap.get(userId);
+      const prefMap = userPrefMap.get(userId) || new Map();
+
+      // ── Kênh 1: In-App / Realtime SSE ──
+      const inAppPref = prefMap.get(NOTIFICATION_CHANNEL.IN_APP);
+      const inAppEnabled = inAppPref ? inAppPref.enabled : true;
+      const inAppThreshold = (inAppPref?.severityThreshold || NOTIFICATION_SEVERITY.LOW) as NotificationSeverity;
+      const inAppThresholdWeight = SEVERITY_WEIGHT[inAppThreshold] || 1;
+
+      if (inAppEnabled && severityWeight >= inAppThresholdWeight) {
+        notificationsToCreate.push({
+          userId,
+          incidentId: dto.incidentId,
+          templateId: null,
+          channel: NOTIFICATION_CHANNEL.IN_APP,
+          title,
+          content,
+          severity,
+          status: NOTIFICATION_STATUS.SENT,
+          sentAt: new Date(),
+        });
+        dispatchedResult.push({
+          id: dto.incidentId,
+          userId,
+          channel: NOTIFICATION_CHANNEL.IN_APP,
+          status: NOTIFICATION_STATUS.SENT,
+        });
+        usedChannels.add(NOTIFICATION_CHANNEL.IN_APP);
+
+        // Bắn sự kiện realtime SSE tới client
+        this.sse.sendToUser(userId, {
+          type: "notification:ppe_violation",
+          data: {
+            incidentId: dto.incidentId,
+            siteId: dto.siteId,
+            cameraId: dto.cameraId,
+            cameraCode: dto.cameraCode,
+            siteName: dto.siteName,
+            violationType: dto.violationType,
+            severity,
+            title,
+            content,
+            evidenceUrl: dto.evidenceUrl,
+            detectedAt: dto.detectedAt || new Date().toISOString(),
+          },
+        });
+      }
+
+      // ── Kênh 2: Email Alert ──
+      const emailPref = prefMap.get(NOTIFICATION_CHANNEL.EMAIL);
+      const emailEnabled = emailPref ? emailPref.enabled : true;
+      const emailThreshold = (emailPref?.severityThreshold || NOTIFICATION_SEVERITY.HIGH) as NotificationSeverity;
+      const emailThresholdWeight = SEVERITY_WEIGHT[emailThreshold] || 3;
+
+      if (emailEnabled && severityWeight >= emailThresholdWeight && user?.email) {
+        notificationsToCreate.push({
+          userId,
+          incidentId: dto.incidentId,
+          templateId: null,
+          channel: NOTIFICATION_CHANNEL.EMAIL,
+          title,
+          content,
+          severity,
+          status: NOTIFICATION_STATUS.SENT,
+          sentAt: new Date(),
+        });
+        dispatchedResult.push({
+          id: dto.incidentId,
+          userId,
+          channel: NOTIFICATION_CHANNEL.EMAIL,
+          status: NOTIFICATION_STATUS.SENT,
+        });
+        usedChannels.add(NOTIFICATION_CHANNEL.EMAIL);
+
+        // Gửi email bất đồng bộ qua MailService
+        this.mail
+          .sendPpeViolationAlertEmail(user.email, {
+            incidentId: dto.incidentId,
+            violationType: dto.violationType,
+            severity,
+            cameraCode: dto.cameraCode,
+            siteName: dto.siteName,
+            detectedAt: dto.detectedAt,
+            evidenceUrl: dto.evidenceUrl,
+            description: dto.description,
+          })
+          .catch((err) => {
+            console.warn(
+              `[NotificationService] Không thể gửi email cảnh báo PPE tới ${user.email}:`,
+              err?.message || err,
+            );
+          });
+      }
+    }
+
+    // 6. Lưu hàng loạt vào CSDL ppe_notification_db
+    if (notificationsToCreate.length > 0) {
+      await this.repository.createManyNotifications(notificationsToCreate);
+    }
+
+    return {
+      incidentId: dto.incidentId,
+      dispatchedCount: notificationsToCreate.length,
+      channels: Array.from(usedChannels),
+      notifications: dispatchedResult,
+    };
+  }
+
+  // ─────────────────────────────────────────────
+  // User Notifications Inbox Management
+  // ─────────────────────────────────────────────
+
   async list(
     userId: string,
     dto: ListNotificationsDto,
   ): Promise<ListNotificationsResponseDto> {
-    const [items, total] = await this.repository.findMany(userId, dto);
-    const meta = formatPaginationMeta(dto.page ?? 1, dto.limit ?? 20, total);
+    const [items, total, meta] = await this.repository.findMany(userId, dto);
 
     return {
       items,
@@ -106,10 +319,10 @@ export class NotificationService {
   async markAsRead(userId: string, notificationId: string): Promise<void> {
     const notification = await this.repository.findOne(notificationId, userId);
     if (!notification) {
-      throw new AppError("Notification not found", 404, ERROR_CODE.NOT_FOUND);
+      throw new AppError("Không tìm thấy thông báo", 404, ERROR_CODE.NOT_FOUND);
     }
     await this.repository.markAsRead(notificationId, userId);
-    sseManagerService.sendToUser(userId, {
+    this.sse.sendToUser(userId, {
       type: "notification:read",
       data: { notificationId },
     });
@@ -117,7 +330,7 @@ export class NotificationService {
 
   async markAllAsRead(userId: string): Promise<void> {
     await this.repository.markAllAsRead(userId);
-    sseManagerService.sendToUser(userId, {
+    this.sse.sendToUser(userId, {
       type: "notification:read_all",
       data: {},
     });
@@ -126,10 +339,50 @@ export class NotificationService {
   async delete(userId: string, notificationId: string): Promise<void> {
     const notification = await this.repository.findOne(notificationId, userId);
     if (!notification) {
-      throw new AppError("Notification not found", 404, ERROR_CODE.NOT_FOUND);
+      throw new AppError("Không tìm thấy thông báo", 404, ERROR_CODE.NOT_FOUND);
     }
     await this.repository.delete(notificationId, userId);
   }
+
+  // ─────────────────────────────────────────────
+  // User Notification Preferences Management
+  // ─────────────────────────────────────────────
+
+  async getUserPreferences(userId: string): Promise<NotificationPreferenceDto[]> {
+    const preferences = await this.repository.findUserPreferences(userId);
+    const existingChannels = new Set(preferences.map((p) => p.channel));
+    const merged = [...preferences];
+
+    for (const def of DEFAULT_PREFERENCES) {
+      if (!existingChannels.has(def.channel)) {
+        const created = await this.repository.upsertPreference(
+          userId,
+          def.channel,
+          def.enabled,
+          def.severityThreshold,
+        );
+        merged.push(created);
+      }
+    }
+
+    return merged;
+  }
+
+  async updateUserPreference(
+    userId: string,
+    dto: UpdateNotificationPreferenceDto,
+  ): Promise<NotificationPreferenceDto> {
+    return this.repository.upsertPreference(
+      userId,
+      dto.channel,
+      dto.enabled,
+      dto.severityThreshold || NOTIFICATION_SEVERITY.LOW,
+    );
+  }
+
+  // ─────────────────────────────────────────────
+  // Legacy / Direct Send & Broadcast
+  // ─────────────────────────────────────────────
 
   async send(dto: SendNotificationDto): Promise<{ sentCount: number }> {
     const {
@@ -137,75 +390,38 @@ export class NotificationService {
       channels,
       title,
       content,
-      type,
-      priority,
-      actionUrl,
-      metadata,
-      templateKey = EMAIL_TEMPLATE_KEY.CUSTOM,
-      templateData,
+      severity = NOTIFICATION_SEVERITY.NORMAL,
+      incidentId,
     } = dto;
 
-    const webRecords = channels.includes(NOTIFICATION_CHANNEL.WEB)
-      ? userIds.map((userId) => ({
+    const records = [];
+    for (const userId of userIds) {
+      for (const channel of channels) {
+        records.push({
           userId,
-          type: type || NOTIFICATION_TYPE.INFO,
-          priority: priority || NOTIFICATION_PRIORITY.NORMAL,
+          incidentId: incidentId || null,
+          templateId: null,
+          channel,
           title,
           content,
-          actionUrl: actionUrl || null,
-          metadata: metadata || null,
-        }))
-      : [];
-
-    let emailRecords: Array<{
-      userId: string;
-      toEmail: string;
-      subject: string;
-      templateKey: string;
-      templateData: any;
-      status: string;
-    }> = [];
-
-    if (channels.includes(NOTIFICATION_CHANNEL.EMAIL)) {
-      const targetUsers = await userRepository.findActiveUsersByIds(userIds);
-      const subject =
-        ((templateData?.subject as string) ||
-          DEFAULT_EMAIL_SUBJECTS[templateKey] ||
-          title) ??
-        "Thông báo từ hệ thống";
-
-      emailRecords = targetUsers
-        .filter((u): u is { id: string; email: string } => Boolean(u.email))
-        .map((u) => ({
-          userId: u.id,
-          toEmail: u.email,
-          subject,
-          templateKey,
-          templateData: (templateData || {
-            subject: title,
-            html: content,
-          }) as any,
-          status: EMAIL_STATUS.PENDING,
-        }));
+          severity,
+          status: NOTIFICATION_STATUS.SENT,
+          sentAt: new Date(),
+        });
+      }
     }
 
-    if (webRecords.length > 0 || emailRecords.length > 0) {
-      await this.repository.createMultiChannelNotifications(
-        webRecords,
-        emailRecords,
-      );
+    if (records.length > 0) {
+      await this.repository.createManyNotifications(records);
 
-      // Real-time Push via SSE cho các user nhận kênh WEB
-      if (channels.includes(NOTIFICATION_CHANNEL.WEB)) {
+      if (channels.includes(NOTIFICATION_CHANNEL.IN_APP) || channels.includes(NOTIFICATION_CHANNEL.WEB)) {
         for (const userId of userIds) {
-          sseManagerService.sendToUser(userId, {
+          this.sse.sendToUser(userId, {
             type: "notification:new",
             data: {
               title,
               content,
-              type: type || NOTIFICATION_TYPE.INFO,
-              priority: priority || NOTIFICATION_PRIORITY.NORMAL,
-              actionUrl: actionUrl || null,
+              severity,
               createdAt: new Date().toISOString(),
             },
           });
@@ -213,7 +429,7 @@ export class NotificationService {
       }
     }
 
-    return { sentCount: userIds.length };
+    return { sentCount: records.length };
   }
 
   async broadcast(
@@ -224,79 +440,44 @@ export class NotificationService {
     let totalRecipients = 0;
 
     while (true) {
-      const usersChunk = await userRepository.getActiveUsersChunk(
+      const usersChunk = await this.userRepo.getActiveUsersChunk(
         BATCH_SIZE,
         cursorId,
       );
-      if (usersChunk.length === 0) {
-        break;
-      }
+      if (usersChunk.length === 0) break;
 
       const records = usersChunk.map((u) => ({
         userId: u.id,
-        type: dto.type || NOTIFICATION_TYPE.SYSTEM,
-        priority: dto.priority || NOTIFICATION_PRIORITY.NORMAL,
+        incidentId: null,
+        templateId: null,
+        channel: NOTIFICATION_CHANNEL.IN_APP,
         title: dto.title,
         content: dto.content,
-        actionUrl: dto.actionUrl || null,
-        metadata: dto.metadata || null,
+        severity: dto.severity || NOTIFICATION_SEVERITY.NORMAL,
+        status: NOTIFICATION_STATUS.SENT,
+        sentAt: new Date(),
       }));
 
       await this.repository.createManyNotifications(records);
       totalRecipients += usersChunk.length;
       cursorId = usersChunk[usersChunk.length - 1].id;
 
-      if (usersChunk.length < BATCH_SIZE) {
-        break;
-      }
+      if (usersChunk.length < BATCH_SIZE) break;
     }
 
     if (totalRecipients > 0) {
-      // Real-time Push via SSE (Broadcast)
-      sseManagerService.broadcast({
+      this.sse.broadcast({
         type: "notification:broadcast",
         data: {
           title: dto.title,
           content: dto.content,
-          type: dto.type || NOTIFICATION_TYPE.SYSTEM,
-          priority: dto.priority || NOTIFICATION_PRIORITY.NORMAL,
-          actionUrl: dto.actionUrl || null,
+          severity: dto.severity || NOTIFICATION_SEVERITY.NORMAL,
           createdAt: new Date().toISOString(),
         },
       });
     }
 
     return { totalRecipients };
-  }
-
-  async listEmails(dto: ListEmailsDto): Promise<ListEmailsResponseDto> {
-    const { data: items, meta } = await this.repository.findEmails(dto);
-
-    return {
-      items,
-      total: meta.total,
-      page: meta.page,
-      limit: meta.limit,
-      totalPages: meta.totalPages,
-      meta,
-    };
-  }
-
-  async retryEmail(emailId: string): Promise<void> {
-    const email = await this.repository.findEmailById(emailId);
-    if (!email) {
-      throw new AppError("Email record not found", 404, ERROR_CODE.NOT_FOUND);
-    }
-
-    if (email.status === EMAIL_STATUS.SENT) {
-      throw new AppError(
-        "Email has already been sent successfully",
-        400,
-        ERROR_CODE.VALIDATION_ERROR,
-      );
-    }
-
-    await this.repository.resetEmailForRetry(emailId);
   }
 
   // ─────────────────────────────────────────────
@@ -313,14 +494,10 @@ export class NotificationService {
         id: item.id,
         code: item.code,
         name: item.name,
-        description: item.description,
-        channels: item.channels,
-        subject: item.subject,
-        title: item.title,
-        content: item.content,
-        variables: item.variables,
-        isSystem: item.isSystem,
-        isActive: item.isActive,
+        channel: item.channel,
+        subjectTemplate: item.subjectTemplate,
+        contentTemplate: item.contentTemplate,
+        status: item.status,
         createdAt: item.createdAt,
         updatedAt: item.updatedAt,
       })),
@@ -336,7 +513,7 @@ export class NotificationService {
     const template = await this.repository.findTemplateByCode(code);
     if (!template) {
       throw new AppError(
-        `Template with code '${code}' not found`,
+        `Không tìm thấy mẫu thông báo với mã '${code}'`,
         404,
         ERROR_CODE.NOT_FOUND,
       );
@@ -351,7 +528,7 @@ export class NotificationService {
     const existing = await this.repository.findTemplateByCode(data.code);
     if (existing) {
       throw new AppError(
-        `Template with code '${data.code}' already exists`,
+        `Mẫu thông báo với mã '${data.code}' đã tồn tại`,
         409,
         ERROR_CODE.DUPLICATE_ENTRY,
       );
@@ -379,7 +556,7 @@ export class NotificationService {
   ) {
     const template = await this.repository.findTemplateById(id);
     if (!template) {
-      throw new AppError("Template not found", 404, ERROR_CODE.NOT_FOUND);
+      throw new AppError("Không tìm thấy mẫu thông báo", 404, ERROR_CODE.NOT_FOUND);
     }
 
     const updated = await this.repository.updateTemplate(id, data);
@@ -403,15 +580,7 @@ export class NotificationService {
   ): Promise<void> {
     const template = await this.repository.findTemplateById(id);
     if (!template) {
-      throw new AppError("Template not found", 404, ERROR_CODE.NOT_FOUND);
-    }
-
-    if (template.isSystem) {
-      throw new AppError(
-        "System template cannot be deleted",
-        400,
-        ERROR_CODE.VALIDATION_ERROR,
-      );
+      throw new AppError("Không tìm thấy mẫu thông báo", 404, ERROR_CODE.NOT_FOUND);
     }
 
     await this.repository.deleteTemplate(id);
@@ -433,19 +602,15 @@ export class NotificationService {
   ): Promise<PreviewNotificationTemplateResponseDto> {
     const template = await this.getTemplateByCode(code);
 
-    const subject = template.subject
-      ? renderTemplateString(template.subject, dto.variables)
+    const subject = template.subjectTemplate
+      ? renderTemplateString(template.subjectTemplate, dto.variables)
       : null;
-    const title = template.title
-      ? renderTemplateString(template.title, dto.variables)
-      : null;
-    const content = renderTemplateString(template.content, dto.variables);
+    const content = renderTemplateString(template.contentTemplate, dto.variables);
 
-    const channels = (template.channels as string[]) || [];
     let html: string | undefined;
-    if (channels.includes(NOTIFICATION_CHANNEL.EMAIL)) {
+    if (template.channel === NOTIFICATION_CHANNEL.EMAIL) {
       html = this.emailTemplateService.baseLayout(
-        title || subject || template.name,
+        subject || template.name,
         content,
       );
     }
@@ -453,7 +618,7 @@ export class NotificationService {
     return {
       code: template.code,
       subject,
-      title,
+      title: subject,
       content,
       html,
     };
@@ -465,17 +630,56 @@ export class NotificationService {
     dto: TestSendNotificationTemplateDto,
   ): Promise<{ message: string }> {
     const template = await this.getTemplateByCode(code);
+    const content = renderTemplateString(template.contentTemplate, dto.variables);
+    const subject = template.subjectTemplate
+      ? renderTemplateString(template.subjectTemplate, dto.variables)
+      : template.name;
 
-    await notificationDispatcher.sendWithTemplate({
-      userId,
-      templateCode: template.code,
-      variables: dto.variables,
-      channels: dto.channels || (template.channels as NotificationChannel[]),
-      toEmail: dto.toEmail,
+    await this.send({
+      userIds: [userId],
+      channels: dto.channels || [template.channel as NotificationChannel],
+      title: subject,
+      content,
     });
 
     return {
-      message: `Test notification sent successfully for template '${code}'`,
+      message: `Đã gửi thử thông báo thành công cho mẫu '${code}'`,
     };
   }
+
+  // ─────────────────────────────────────────────
+  // Email Worker Legacy Support
+  // ─────────────────────────────────────────────
+
+  async listEmails(dto: ListEmailsDto): Promise<ListEmailsResponseDto> {
+    const { data: items, meta } = await this.repository.findEmails(dto);
+
+    return {
+      items,
+      total: meta.total,
+      page: meta.page,
+      limit: meta.limit,
+      totalPages: meta.totalPages,
+      meta,
+    };
+  }
+
+  async retryEmail(emailId: string): Promise<void> {
+    const email = await this.repository.findEmailById(emailId);
+    if (!email) {
+      throw new AppError("Không tìm thấy bản ghi email", 404, ERROR_CODE.NOT_FOUND);
+    }
+
+    if (email.status === EMAIL_STATUS.SENT) {
+      throw new AppError(
+        "Email này đã được gửi thành công, không thể thử lại",
+        400,
+        ERROR_CODE.VALIDATION_ERROR,
+      );
+    }
+
+    await this.repository.resetEmailForRetry(emailId);
+  }
 }
+
+export const notificationService = new NotificationService();
