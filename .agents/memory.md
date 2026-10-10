@@ -915,3 +915,39 @@
     - Tái sử dụng kiểu phân trang chuẩn tập trung `PaginationMeta` và `PaginatedResult` từ `src/common/types/pagination.type.ts`.
     - Dọn dẹp ép kiểu `(envConfig as any)` tại `camera.server.ts` và chuẩn hóa `result.data` tại controller.
     - Mở rộng bộ test `tests/camera-service.test.ts` lên 22/22 test cases PASS 100% (toàn bộ 54/54 PPE tests pass 100%, build và lint sạch 0 lỗi).
+
+- **PPE Microservices: Task BE-06 - Incident Management Service (2026-10-10)**:
+  - **Mục tiêu**: Triển khai hoàn chỉnh dịch vụ Quản lý Sự cố và Bằng chứng số vi phạm an toàn PPE (Incident Management Service) theo phân công `BE-06`, đặc tả `D08.pdf`, vòng đời sự cố (State Machine), và kiến trúc Microservices độc lập (`ppe_incident_db`, port 8893).
+  - **1. Kiến trúc phân tầng 5 lớp chuẩn mực**:
+    - `incident.constant.ts`: Định nghĩa tập trung `INCIDENT_STATUS` (`PENDING_REVIEW`, `CONFIRMED`, `DISMISSED`, `RESOLVED`, `CLOSED`), `VIOLATION_TYPE` (`NO_HELMET`, `NO_VEST`, `RESTRICTED_AREA`, `MULTI_VIOLATION`), `INCIDENT_SEVERITY` (`LOW`, `MEDIUM`, `HIGH`, `CRITICAL`), `EVIDENCE_TYPE` (`SNAPSHOT`, `VIDEO_CLIP`), `ASSIGNMENT_STATUS` (`ACTIVE`, `COMPLETED`), `EVIDENCE_ACCESS_ACTION` (`VIEW`, `DOWNLOAD`), và bảng chuyển trạng thái hợp lệ `VALID_INCIDENT_TRANSITIONS`.
+    - `incident.dto.ts`: Định nghĩa toàn bộ interfaces cho Incident, Evidence, EvidenceMetadata, Lifecycle Actions (Review, Resolve, Close), Assignment, Comment và `PaginatedResultDto`.
+    - `incident.validation.ts`: Zod schema validation chặt chẽ ở biên HTTP (`UUID`, enum checks, chặn payload rỗng `{}` khi cập nhật, kiểm tra ràng buộc bắt buộc lý do `>= 3` ký tự khi bác bỏ `DISMISSED`, yêu cầu `resolutionNote` khi `RESOLVED`).
+    - `incident.repository.ts`: Truy vấn độc quyền trên `ppe_incident_db` qua `incidentPrisma` (`@prisma/client-incident`) với interactive transaction `DEFAULT_INCIDENT_TRANSACTION_OPTIONS`, tự động lưu vết chuyển trạng thái vào `IncidentStatusHistory`, hỗ trợ lưu initial Evidence và Metadata, phân trang chuẩn `calculatePaginationSkip` + `formatPaginationMeta`, xử lý an toàn kiểu `BigInt` của trường `fileSize` qua `serializeEvidence` và `serializeIncident`.
+    - `incident.service.ts`: Xử lý nghiệp vụ vòng đời sự cố (`PENDING_REVIEW -> CONFIRMED / DISMISSED -> RESOLVED -> CLOSED`), kiểm tra quyền cập nhật hồ sơ sự cố (chặn sửa đổi khi đã `CLOSED`), ghi nhận log truy vết truy cập bằng chứng số `EvidenceAccessLog`, ném lỗi chuẩn `AppError` và `ERROR_CODE` (`INCIDENT_NOT_FOUND`, `EVIDENCE_NOT_FOUND`, `INVALID_STATUS_TRANSITION`, `BAD_REQUEST`).
+    - `incident.controller.ts`: Tiếp nhận HTTP request/response, format dữ liệu chuẩn `{ success: true, data: ..., meta: ... }`, chuyển lỗi sang `next(error)`.
+    - `incident.route.ts`: Xuất 2 routers (`incidentRouter` và `evidenceRouter`), bảo vệ 100% bằng dynamic RBAC permissions (`PPE_INCIDENT_READ`, `PPE_INCIDENT_REVIEW`, `PPE_INCIDENT_UPDATE`, `PPE_INCIDENT_DELETE`, `PPE_INCIDENT_MANAGE`).
+    - `incident.openapi.ts`: Đăng ký tài liệu OpenAPI 3.0 với `openapiRegistry` và Swagger UI (`/api/docs`).
+  - **2. Standalone Microservice & API Gateway Compatibility**:
+    - `src/incident.app.ts`: Express application độc lập cho Incident Service (:8893) tích hợp đầy đủ Security Headers (Helmet, CSP), CORS, Morgan, Request ID, Rate Limiting, Maintenance guard, và Health checks (`/health`, `/api/v1/incidents/health`, `/incidents/health`).
+    - `src/incident.server.ts`: HTTP listener trên cổng 8893 (`INCIDENT_PORT`) kèm graceful shutdown an toàn ngắt kết nối `incidentPrisma`.
+    - `package.json`: Bổ sung scripts `dev:incident` và `start:incident`.
+    - Khớp 100% với định tuyến Traefik API Gateway (`traefik/dynamic.yml`) router `incidents` (chuyển tiếp `/api/v1/incidents`, `/api/v1/evidences`).
+  - **3. Dual-Mounting Monolith**:
+    - Tích hợp vào Monolith API router tại `src/routes/index.ts` dưới `/incidents` và `/evidences`.
+  - **4. Automated Verification**:
+    - Bộ test tự động chuyên dụng `tests/incident-service.test.ts` (26/26 test cases PASS 100%).
+    - Toàn bộ 68/68 test cases của các PPE Microservices (`tests/incident-service.test.ts`, `tests/camera-service.test.ts`, `tests/site-service.test.ts`) đều PASS 100%.
+    - `pnpm exec prisma validate --schema=prisma/incident/schema.prisma`: Schema hợp lệ 100%.
+    - `pnpm build`: TypeScript compile 0 lỗi (Strict Mode).
+    - `pnpm run lint`: ESLint 0 errors / 0 warnings.
+  - **5. Open Code Review Hardening (2026-10-10)**:
+    - Sửa lỗi runtime 500 do `BigInt` khi gọi `DELETE /api/v1/evidences/:id`: bọc `serializeEvidence(deleted)` trong `IncidentRepository.deleteEvidence`.
+    - Chống bypass vòng đời sự cố (State Machine) khi tạo mới: siết chặt `createIncidentSchema` chỉ cho phép trạng thái ban đầu là `PENDING_REVIEW`.
+    - Bổ sung kiểm tra trạng thái sự cố đã đóng (`CLOSED` / `DISMISSED`) trong `IncidentService.assignIncident` và `IncidentService.addEvidence` (chặn sửa đổi/phân công hồ sơ đã đóng).
+    - Loại bỏ ép kiểu lỏng lẻo `(req as any).user` và dummy fallback UUID `00000000-...` trong `IncidentController`, truy cập trực tiếp `req.user.id` chuẩn type.
+    - Siết chặt validation cho Evidence: thêm regex định dạng chuẩn cho `mimeType` và chặn ký tự path traversal (`..`) trong `storageKey` của `createEvidenceSchema`.
+    - Nâng quyền bảo vệ endpoint `POST /:id/comments` từ `PPE_INCIDENT_READ` lên `PPE_INCIDENT_UPDATE`.
+    - Cải thiện type safety trong `incident.server.ts` với `(err: unknown)` khi disconnect database.
+    - Loại bỏ triệt để `(this.db as any)` trong `IncidentRepository`, chuẩn hóa kiểu `IncidentPrismaClient`, `IncidentPrisma.IncidentWhereInput`, `IncidentPrisma.EvidenceWhereInput`, và sửa lỗi truyền object pagination vào `skip: pagination.skip, take: pagination.take`.
+    - Mở rộng test suite `tests/incident-service.test.ts` lên 26/26 test cases PASS 100%.
+

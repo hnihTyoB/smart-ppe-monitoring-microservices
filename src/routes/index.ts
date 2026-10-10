@@ -21,6 +21,10 @@ import {
   cameraRouter,
   cameraStreamRouter,
 } from "../modules/camera/camera.route";
+import {
+  incidentRouter,
+  evidenceRouter,
+} from "../modules/incident/incident.route";
 
 const router = Router();
 
@@ -53,6 +57,10 @@ router.use("/restricted-areas", restrictedAreaRouter);
 // PPE Camera Management Microservice Endpoints
 router.use("/cameras", cameraRouter);
 router.use("/camera-streams", cameraStreamRouter);
+
+// PPE Incident Management Microservice Endpoints
+router.use("/incidents", incidentRouter);
+router.use("/evidences", evidenceRouter);
 
 export default router;
 

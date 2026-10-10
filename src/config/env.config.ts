@@ -117,6 +117,11 @@ const envSchema = z
     CAMERA_SERVICE_STANDALONE: z.string().default("false"),
     CAMERA_SERVICE_URL: z.string().default("http://localhost:8892"),
 
+    // ── Incident Management Service (Database-per-Service Architecture :8893) ─
+    INCIDENT_PORT: z.coerce.number().int().positive().default(8893),
+    INCIDENT_SERVICE_STANDALONE: z.string().default("false"),
+    INCIDENT_SERVICE_URL: z.string().default("http://localhost:8893"),
+
 
 
     // ── Webhook ───────────────────────────────────────────────────────────────
@@ -420,6 +425,11 @@ export const envConfig = {
     port: _env.CAMERA_PORT,
     standalone: _env.CAMERA_SERVICE_STANDALONE === "true",
     serviceUrl: _env.CAMERA_SERVICE_URL,
+  },
+  incident: {
+    port: _env.INCIDENT_PORT,
+    standalone: _env.INCIDENT_SERVICE_STANDALONE === "true",
+    serviceUrl: _env.INCIDENT_SERVICE_URL,
   },
 
 
