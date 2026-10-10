@@ -25,6 +25,11 @@ import {
   incidentRouter,
   evidenceRouter,
 } from "../modules/incident/incident.route";
+import {
+  statisticRouter,
+  reportRouter,
+  aiModelRouter,
+} from "../modules/reporting/reporting.route";
 
 const router = Router();
 
@@ -61,6 +66,11 @@ router.use("/camera-streams", cameraStreamRouter);
 // PPE Incident Management Microservice Endpoints
 router.use("/incidents", incidentRouter);
 router.use("/evidences", evidenceRouter);
+
+// PPE Reporting & Analytics Microservice Endpoints
+router.use("/statistics", statisticRouter);
+router.use("/reports", reportRouter);
+router.use("/ai-models", aiModelRouter);
 
 export default router;
 

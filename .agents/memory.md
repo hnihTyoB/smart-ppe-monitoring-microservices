@@ -1018,5 +1018,50 @@
     - **Preference Fallback Healing**: `getUserPreferences` tự động bổ sung và lưu các kênh mặc định còn thiếu (`DEFAULT_PREFERENCES`) khi người dùng mới chỉ cấu hình một phần kênh.
     - **Audit Log Error Visibility**: Thay thế nuốt lỗi âm thầm bằng `console.warn` trong `NotificationRepository.createAuditLog`.
     - **Magic Strings & Type Safety**: Thay thế chuỗi cứng `"ACTIVE"`, `"INACTIVE"`, `"CRITICAL"` bằng hằng số `NOTIFICATION_TEMPLATE_STATUS` và `NOTIFICATION_SEVERITY`; chuẩn hóa `IdentityPrisma.EmailNotificationWhereInput`.
-    - Toàn bộ bộ test `tests/notification-service.test.ts` đạt 19/19 tests PASS (100%), `pnpm build` compile thành công 0 lỗi, `pnpm run lint` sạch 0 warnings / 0 errors.
+- **PPE Microservices: Task BE-09 - Reporting & Analytics Service (2026-10-11)**:
+  - **Mục tiêu**: Hoàn thiện toàn diện module Reporting & Analytics Service theo phân công đồ án PPE Microservices (`BE-09`), đặc tả kiến trúc kỹ thuật `D08.pdf` (Mục 1, 2.7, 2.8, 3.5, 4.2, 4.5, 6.2), và kiến trúc microservices độc lập (`ppe_reporting_db`, port 8894).
+  - **1. Acceptance Criteria Cốt lõi & Dashboard APIs có số liệu**:
+    - `Dashboard APIs có số liệu`: Đáp ứng chuẩn xác tiêu chí nghiệm thu của bảng phân công task, phục vụ trực tiếp cho frontend dashboard charts (FE-08).
+    - Cung cấp đầy đủ REST endpoints:
+      - `GET /api/v1/statistics/summary`: Dashboard KPIs tổng quan (Total Incidents, Open, Resolved, True Violations, False Alarms, False Alarm Rate %, Compliance Rate %, MTTR).
+      - `GET /api/v1/statistics/trends`: Biểu đồ xu hướng chuỗi thời gian gom nhóm theo Ngày (`DAY`), Tuần (`WEEK`), hoặc Tháng (`MONTH`).
+      - `GET /api/v1/statistics/by-violation`: Phân bổ sự cố theo loại vi phạm (`NO_HELMET`, `NO_VEST`, `RESTRICTED_AREA`, `MULTI_VIOLATION`) và cấp độ nghiêm trọng (`CRITICAL`, `HIGH`, `MEDIUM`, `NORMAL`, `LOW`).
+      - `GET /api/v1/statistics/by-camera`: Bảng xếp hạng camera ghi nhận nhiều vi phạm nhất trên công trường (ranking descending).
+      - `GET /api/v1/statistics/ai-performance` & `POST /api/v1/statistics/record-ai-performance`: Đo đạc hiệu năng suy luận thị giác máy tính (`avgFps`, `avgLatencyMs`, `maxLatencyMs`, `totalFrames`) và tiếp nhận telemetry từ AI pipeline.
+      - `POST /api/v1/statistics/aggregate-daily`: Rollup aggregation tự động chốt dữ liệu thống kê hàng ngày.
+  - **2. Quản trị Báo cáo Định kỳ & Mô hình AI (D08.pdf Mục 3.5, 4.1 & 4.5)**:
+    - **Report Templates & Generations (`/api/v1/reports/*`)**:
+      - Quản lý mẫu báo cáo: `ReportTemplate` (PDF, EXCEL, CSV, JSON), kiểm tra duy nhất mã code slug.
+      - Sinh báo cáo định kỳ: `ReportGeneration` (DAILY, WEEKLY, MONTHLY, VIOLATION_SUMMARY, AI_PERFORMANCE) kèm metadata tải file `/download` và phân trang lịch sử `/history`.
+    - **AI Model & Version Governance (`/api/v1/ai-models/*`)**:
+      - Quản lý danh mục mô hình AI: `AiModel` (YOLO PPE Detection, ByteTrack Tracker, Re-ID).
+      - Quản lý phiên bản: `AiModelVersion` (semver regex, PyTorch framework, input size, metrics: Precision, Recall, F1, mAP@50, mAP@50:95).
+      - Kích hoạt triển khai: Endpoint `PATCH /:id/versions/:versionId/deploy` tự động chuyển phiên bản mục tiêu sang `DEPLOYED` và lưu trữ các phiên bản cũ là `ARCHIVED`.
+  - **3. Kiến trúc phân tầng 5 lớp chuẩn mực**:
+    - `reporting.constant.ts`: Định nghĩa tập trung `REPORT_TYPE`, `REPORT_STATUS`, `REPORT_FILE_TYPE`, `REPORT_TEMPLATE_STATUS`, `AI_MODEL_TYPE`, `AI_MODEL_STATUS`, `AI_MODEL_VERSION_STATUS`, `STATISTIC_GROUP_BY`.
+    - `reporting.dto.ts`: Định nghĩa toàn bộ interfaces DTO cho Dashboard filters, Summary, Trends, Distribution, Camera stats, AI Performance, Templates, Generations, Models, Versions.
+    - `reporting.validation.ts`: Zod schema validation chặt chẽ ở biên HTTP (`UUID`, enum checks, date regex `YYYY-MM-DD`, date range validation `endDate >= startDate`, semver regex `v?\d+\.\d+\.\d+`).
+    - `reporting.repository.ts`: Truy vấn độc quyền trên `ppe_reporting_db` bằng `reportingPrisma` (`@prisma/client-reporting`), xử lý an toàn kiểu `BigInt` của trường `totalFrames` qua `serializeAiPerformance`, phân trang chuẩn `calculatePaginationSkip` + `formatPaginationMeta`.
+    - `reporting.service.ts`: Xử lý nghiệp vụ tính toán toán học chống chia cho 0, gom nhóm chuỗi thời gian, ghi nhận Audit Log (`GENERATE_PPE_REPORT`, `CREATE_REPORT_TEMPLATE`, `CREATE_AI_MODEL`, `DEPLOY_AI_MODEL_VERSION`).
+    - `reporting.controller.ts`: Tiếp nhận HTTP request/response, format dữ liệu chuẩn `{ success: true, data: ..., meta: ... }`, chuyển lỗi sang `next(error)`.
+    - `reporting.route.ts`: Xuất 3 routers (`statisticRouter`, `reportRouter`, `aiModelRouter`), bảo vệ 100% bằng dynamic RBAC permissions (`PPE_REPORTING_READ`, `PPE_REPORTING_EXPORT`, `PPE_AI_METRICS_READ`, `PPE_MODEL_READ`, `PPE_MODEL_MANAGE`).
+    - `reporting.openapi.ts`: Đăng ký tài liệu OpenAPI 3.0 với `openapiRegistry` và Swagger UI (`/api/docs`).
+  - **4. Standalone Microservice & API Gateway Compatibility**:
+    - `src/reporting.app.ts`: Express application độc lập cho Reporting Service (:8894) tích hợp Helmet, CORS, Morgan, Request ID, Rate Limiting, Maintenance guard, và Health checks (`/health`, `/api/v1/reports/health`, `/api/v1/statistics/health`, `/api/v1/ai-models/health`).
+    - `src/reporting.server.ts`: HTTP listener trên cổng 8894 (`REPORTING_PORT`) kèm graceful shutdown an toàn ngắt kết nối `reportingPrisma`.
+    - Khớp 100% với định tuyến Traefik API Gateway (`traefik/dynamic.yml`) router `reporting` (chuyển tiếp `/api/v1/reports`, `/api/v1/statistics`, `/api/v1/ai-models`).
+    - `package.json`: Bổ sung scripts `dev:reporting` và `start:reporting`.
+  - **5. Automated Verification & Code Review Hardening**:
+    - **Audit Log Ingestion**: `ReportingService` constructor khởi tạo fallback `this.rbacRepository = rbacRepository || new RbacRepository()` đảm bảo toàn bộ nhật ký kiểm toán (`AGGREGATE_DAILY_STATISTICS`, `CREATE_REPORT_TEMPLATE`, `GENERATE_PPE_REPORT`, `CREATE_AI_MODEL`, `CREATE_AI_MODEL_VERSION`, `DEPLOY_AI_MODEL_VERSION`) được lưu trữ đúng quy cách.
+    - **Atomic Transaction Deployment**: `deployAiModelVersion` bọc trong `reportingPrisma.$transaction` nguyên tử, lưu trữ phiên bản cũ và kích hoạt phiên bản mới an toàn chống race condition.
+    - **Privilege Enforcement**: `POST /api/v1/statistics/aggregate-daily` nâng cấp lên quyền `requirePermission(PERMISSIONS.PPE_REPORTING_EXPORT)`.
+    - **Duplicate Version Guard**: `createAiModelVersion` kiểm tra phiên bản đã tồn tại bằng `findAiModelVersionByModelAndVersion` và phản hồi mã lỗi `409 Conflict` (`ERROR_CODE.DUPLICATE_ENTRY`).
+    - **Timezone Drift Protection**: `recordAiPerformanceMetric` sử dụng `formatVietnamDate(new Date(), "YYYY-MM-DD")` chuẩn hóa ngày ghi nhận theo múi giờ Việt Nam (`Asia/Ho_Chi_Minh` UTC+7).
+    - **Strict HTTP Validation**: `reportHistoryQuerySchema` validate chặt chẽ enum `REPORT_TYPE` và `REPORT_STATUS`.
+    - **Controller Type-Safety**: Xóa bỏ toàn bộ ép kiểu `as any` trong `ReportingController`, sử dụng interface generic `Request<..., Dto>`.
+    - Bộ test tự động chuyên dụng `tests/reporting-service.test.ts` (34/34 test cases PASS 100%).
+    - `pnpm exec prisma validate --schema=prisma/reporting/schema.prisma`: Schema hợp lệ 100%.
+    - `pnpm build`: TypeScript compile 0 lỗi (Strict Mode).
+    - `pnpm run lint`: ESLint 0 errors / 0 warnings.
+
 

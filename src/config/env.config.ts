@@ -129,6 +129,11 @@ const envSchema = z
     INCIDENT_SERVICE_STANDALONE: z.string().default("false"),
     INCIDENT_SERVICE_URL: z.string().default("http://localhost:8893"),
 
+    // ── Reporting & Analytics Service (Database-per-Service Architecture :8894) ─
+    REPORTING_PORT: z.coerce.number().int().positive().default(8894),
+    REPORTING_SERVICE_STANDALONE: z.string().default("false"),
+    REPORTING_SERVICE_URL: z.string().default("http://localhost:8894"),
+
 
 
     // ── Webhook ───────────────────────────────────────────────────────────────
@@ -437,6 +442,11 @@ export const envConfig = {
     port: _env.INCIDENT_PORT,
     standalone: _env.INCIDENT_SERVICE_STANDALONE === "true",
     serviceUrl: _env.INCIDENT_SERVICE_URL,
+  },
+  reporting: {
+    port: _env.REPORTING_PORT,
+    standalone: _env.REPORTING_SERVICE_STANDALONE === "true",
+    serviceUrl: _env.REPORTING_SERVICE_URL,
   },
   minio: {
     endpoint: _env.PPE_MINIO_ENDPOINT,

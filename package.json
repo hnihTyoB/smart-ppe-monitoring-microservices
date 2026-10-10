@@ -13,6 +13,7 @@
     "dev:site": "ts-node-dev --respawn --transpile-only src/site.server.ts",
     "dev:camera": "ts-node-dev --respawn --transpile-only src/camera.server.ts",
     "dev:incident": "ts-node-dev --respawn --transpile-only src/incident.server.ts",
+    "dev:reporting": "ts-node-dev --respawn --transpile-only src/reporting.server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
     "start:api": "node dist/api.server.js",
@@ -22,6 +23,7 @@
     "start:site": "node dist/site.server.js",
     "start:camera": "node dist/camera.server.js",
     "start:incident": "node dist/incident.server.js",
+    "start:reporting": "node dist/reporting.server.js",
 
 
     "prisma:generate": "node scripts/prisma-service.js identity generate",

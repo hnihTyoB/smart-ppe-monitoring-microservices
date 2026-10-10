@@ -15,6 +15,7 @@ import { registerJwksOpenApi } from "../modules/jwks/jwks.openapi";
 import { registerSiteOpenApi } from "../modules/site/site.openapi";
 import { registerCameraOpenApi } from "../modules/camera/camera.openapi";
 import { registerIncidentOpenApi } from "../modules/incident/incident.openapi";
+import { registerReportingOpenApi } from "../modules/reporting/reporting.openapi";
 
 // Tự động khởi tạo và đăng ký 100% routes & schemas từ Zod validation schemas
 registerAuthOpenApi();
@@ -24,6 +25,7 @@ registerSiteOpenApi();
 registerCameraOpenApi();
 registerIncidentOpenApi();
 registerNotificationOpenApi();
+registerReportingOpenApi();
 registerMaintenanceOpenApi();
 registerIntegrationOpenApi();
 registerSystemConfigOpenApi();
