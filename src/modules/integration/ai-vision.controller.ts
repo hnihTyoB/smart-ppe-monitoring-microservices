@@ -19,20 +19,31 @@ export class AiVisionIntegrationController {
   }
 
   /**
+   * Helper phân giải cờ thực thi đồng bộ (?sync=true hoặc body.sync)
+   */
+  private resolveSyncFlag(
+    query?: AiVisionSyncQueryInput,
+    bodySync?: boolean,
+  ): boolean {
+    return (
+      query?.sync === true ||
+      (query?.sync as unknown) === "true" ||
+      (query?.sync as unknown) === "1" ||
+      bodySync === true
+    );
+  }
+
+  /**
    * 1. POST /api/v1/integration/ai-vision/events
    * Tiếp nhận sự kiện vi phạm an toàn từ AI Vision Edge Pipeline
    */
   public ingestEvent = async (
-    req: Request<any, any, AiVisionIngestEventInput, any>,
+    req: Request<unknown, unknown, AiVisionIngestEventInput, AiVisionSyncQueryInput>,
     res: Response,
     next: NextFunction,
   ): Promise<void> => {
     try {
-      const isSync =
-        req.query?.sync === true ||
-        (req.query?.sync as unknown) === "true" ||
-        (req.query?.sync as unknown) === "1" ||
-        req.body?.sync === true;
+      const isSync = this.resolveSyncFlag(req.query, req.body?.sync);
 
       const result = await this.service.ingestEvent(req.body, {
         sync: isSync,
@@ -62,16 +73,12 @@ export class AiVisionIntegrationController {
    * Tiếp nhận mảng sự kiện hàng loạt (Edge Offline Recovery)
    */
   public ingestBatch = async (
-    req: Request<any, any, AiVisionBatchIngestInput, any>,
+    req: Request<unknown, unknown, AiVisionBatchIngestInput, AiVisionSyncQueryInput>,
     res: Response,
     next: NextFunction,
   ): Promise<void> => {
     try {
-      const isSync =
-        req.query?.sync === true ||
-        (req.query?.sync as unknown) === "true" ||
-        (req.query?.sync as unknown) === "1" ||
-        req.body?.sync === true;
+      const isSync = this.resolveSyncFlag(req.query, req.body?.sync);
 
       const result = await this.service.ingestBatch(req.body, {
         sync: isSync,

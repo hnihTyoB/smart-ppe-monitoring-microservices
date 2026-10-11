@@ -33,6 +33,9 @@ import {
   ReliabilityService,
   reliabilityService,
 } from "../reliability/reliability.service";
+import { envConfig } from "../../config/env.config";
+import type { Camera } from "@prisma/client-camera";
+import type { Site } from "@prisma/client-site";
 import type {
   AiVisionIngestEventDto,
   AiVisionBatchIngestDto,
@@ -499,7 +502,16 @@ export class AiVisionIntegrationService {
       incidentDbStatus = "DISCONNECTED";
     }
 
-    const brokerStatus = "CONNECTED";
+    let brokerStatus: "CONNECTED" | "DISCONNECTED" = "DISCONNECTED";
+    try {
+      if (envConfig.redis.enabled) {
+        brokerStatus = this.bus.isConnected ? "CONNECTED" : "DISCONNECTED";
+      } else {
+        brokerStatus = this.bus ? "CONNECTED" : "DISCONNECTED";
+      }
+    } catch {
+      brokerStatus = "DISCONNECTED";
+    }
 
     const allHealthy =
       cameraDbStatus === "CONNECTED" &&
@@ -507,8 +519,14 @@ export class AiVisionIntegrationService {
       incidentDbStatus === "CONNECTED" &&
       brokerStatus === "CONNECTED";
 
+    const allDown =
+      cameraDbStatus === "DISCONNECTED" &&
+      siteDbStatus === "DISCONNECTED" &&
+      incidentDbStatus === "DISCONNECTED" &&
+      brokerStatus === "DISCONNECTED";
+
     const healthResult: AiVisionHealthDto = {
-      status: allHealthy ? "UP" : "DEGRADED",
+      status: allHealthy ? "UP" : allDown ? "DOWN" : "DEGRADED",
       timestamp: new Date().toISOString(),
       pipeline: {
         broker: brokerStatus,
@@ -535,12 +553,12 @@ export class AiVisionIntegrationService {
     const cameraCode = rawInput.camera?.code || rawInput.cameraCode;
 
     // 1. Tra cứu Camera trong Database
-    let foundCamera: any = null;
+    let foundCamera: Camera | null = null;
     if (cameraId) {
-      foundCamera = await this.cameraRepo.findCameraById(cameraId);
+      foundCamera = (await this.cameraRepo.findCameraById(cameraId)) as Camera | null;
     }
     if (!foundCamera && cameraCode) {
-      foundCamera = await this.cameraRepo.findCameraByCode(cameraCode);
+      foundCamera = (await this.cameraRepo.findCameraByCode(cameraCode)) as Camera | null;
     }
 
     if (foundCamera) {
@@ -553,7 +571,9 @@ export class AiVisionIntegrationService {
 
       // 2. Tra cứu Site từ camera.siteId
       if (foundCamera.siteId) {
-        const foundSite = await this.siteRepo.findSiteById(foundCamera.siteId);
+        const foundSite = (await this.siteRepo.findSiteById(
+          foundCamera.siteId,
+        )) as Site | null;
         if (foundSite) {
           resolvedSite = {
             id: foundSite.id,
@@ -588,12 +608,12 @@ export class AiVisionIntegrationService {
       const siteId = rawInput.site?.id || rawInput.siteId;
       const siteCode = rawInput.site?.code || rawInput.siteCode;
 
-      let foundSite: any = null;
+      let foundSite: Site | null = null;
       if (siteId) {
-        foundSite = await this.siteRepo.findSiteById(siteId);
+        foundSite = (await this.siteRepo.findSiteById(siteId)) as Site | null;
       }
       if (!foundSite && siteCode) {
-        foundSite = await this.siteRepo.findSiteByCode(siteCode);
+        foundSite = (await this.siteRepo.findSiteByCode(siteCode)) as Site | null;
       }
 
       if (foundSite) {
@@ -611,11 +631,12 @@ export class AiVisionIntegrationService {
       } else {
         // Lấy site đầu tiên trong hệ thống làm fallback an toàn
         const sites = await this.siteRepo.findAllSites({ limit: 1 });
-        if (sites.data && sites.data.length > 0) {
+        const defaultSite = sites.data?.[0] as Site | undefined;
+        if (defaultSite) {
           resolvedSite = {
-            id: sites.data[0].id,
-            code: sites.data[0].code,
-            name: sites.data[0].name,
+            id: defaultSite.id,
+            code: defaultSite.code,
+            name: defaultSite.name,
           };
         } else {
           resolvedSite = {
