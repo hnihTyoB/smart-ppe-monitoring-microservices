@@ -2,15 +2,11 @@ import {
   type PrismaClient as NotificationPrismaClient,
   Prisma as NotificationPrisma,
 } from "@prisma/client-notification";
-import { Prisma as IdentityPrisma } from "@prisma/client";
 import {
   notificationPrisma,
   DEFAULT_NOTIFICATION_TRANSACTION_OPTIONS,
 } from "../../database/notification.client";
-import {
-  prisma as identityPrisma,
-  DEFAULT_TRANSACTION_OPTIONS as DEFAULT_IDENTITY_TRANSACTION_OPTIONS,
-} from "../../database/prisma.client";
+import { prisma as identityPrisma } from "../../database/prisma.client";
 import {
   NOTIFICATION_TYPE,
   NOTIFICATION_STATUS,
@@ -549,11 +545,11 @@ export class NotificationRepository {
   }
 
   // ─────────────────────────────────────────────
-  // Email Worker Legacy Support (identityPrisma)
+  // Email Worker Operational Support (Notification DB)
   // ─────────────────────────────────────────────
 
   async claimPendingEmails(batchSize = 20): Promise<ClaimedEmailRecord[]> {
-    return identityPrisma.$queryRaw<ClaimedEmailRecord[]>`
+    return this.db.$queryRaw<ClaimedEmailRecord[]>`
       UPDATE email_notifications
       SET status = ${EMAIL_STATUS.PROCESSING}, updated_at = NOW()
       WHERE id IN (
@@ -592,7 +588,7 @@ export class NotificationRepository {
       sentAt?: Date | null;
     },
   ) {
-    return identityPrisma.emailNotification.update({
+    return this.db.emailNotification.update({
       where: { id },
       data: {
         status: data.status,
@@ -604,25 +600,25 @@ export class NotificationRepository {
   }
 
   async findEmailById(id: string) {
-    return identityPrisma.emailNotification.findUnique({
+    return this.db.emailNotification.findUnique({
       where: { id },
     });
   }
 
   async findEmails(dto: ListEmailsDto) {
     const { skip, take, page, limit } = calculatePaginationSkip(dto.page, dto.limit);
-    const where: IdentityPrisma.EmailNotificationWhereInput = {};
+    const where: NotificationPrisma.EmailNotificationWhereInput = {};
     if (dto.status) where.status = dto.status;
     if (dto.toEmail) where.toEmail = { contains: dto.toEmail, mode: "insensitive" };
 
     const [items, total] = await Promise.all([
-      identityPrisma.emailNotification.findMany({
+      this.db.emailNotification.findMany({
         where,
         orderBy: { createdAt: "desc" },
         skip,
         take,
       }),
-      identityPrisma.emailNotification.count({ where }),
+      this.db.emailNotification.count({ where }),
     ]);
 
     return {
@@ -632,7 +628,7 @@ export class NotificationRepository {
   }
 
   async resetEmailForRetry(id: string) {
-    return identityPrisma.emailNotification.update({
+    return this.db.emailNotification.update({
       where: { id },
       data: {
         status: EMAIL_STATUS.PENDING,

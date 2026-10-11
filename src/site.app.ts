@@ -12,6 +12,7 @@ import {
   zoneRouter,
   restrictedAreaRouter,
 } from "./modules/site/site.route";
+import { safetyRuleRouter } from "./modules/safety-rule/safety-rule.route";
 import { rateLimitMiddleware } from "./middlewares/rate-limit.middleware";
 import { requestIdMiddleware } from "./middlewares/request-id.middleware";
 import { maintenanceGuard } from "./middlewares/maintenance.middleware";
@@ -125,6 +126,19 @@ siteApp.use(
   rateLimitMiddleware,
   maintenanceGuard(),
   restrictedAreaRouter,
+);
+
+siteApp.use(
+  "/api/v1/safety-rules",
+  rateLimitMiddleware,
+  maintenanceGuard(),
+  safetyRuleRouter,
+);
+siteApp.use(
+  "/safety-rules",
+  rateLimitMiddleware,
+  maintenanceGuard(),
+  safetyRuleRouter,
 );
 
 // 5. Error & 404 Handlers

@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../../database/prisma.client";
+import { notificationPrisma } from "../../database/notification.client";
 import { EMAIL_STATUS } from "../../common/constants/notification.constant";
 import { ActivitySummaryStatsDto } from "./cron.dto";
 import {
@@ -70,8 +71,6 @@ export class CronRepository {
     const [
       newUsersCount,
       activeSessionsCount,
-      notificationsSentCount,
-      emailsSentCount,
       webhookDeliveriesCount,
       auditLogsCount,
     ] = await prisma.$transaction([
@@ -85,17 +84,6 @@ export class CronRepository {
           createdAt: { gte: startDate, lte: endDate },
         },
       }),
-      prisma.notification.count({
-        where: {
-          createdAt: { gte: startDate, lte: endDate },
-        },
-      }),
-      prisma.emailNotification.count({
-        where: {
-          status: EMAIL_STATUS.SENT,
-          sentAt: { gte: startDate, lte: endDate },
-        },
-      }),
       prisma.webhookDelivery.count({
         where: {
           createdAt: { gte: startDate, lte: endDate },
@@ -107,6 +95,28 @@ export class CronRepository {
         },
       }),
     ]);
+
+    let notificationsSentCount = 0;
+    let emailsSentCount = 0;
+    try {
+      const [notifs, emails] = await Promise.all([
+        notificationPrisma.notification.count({
+          where: {
+            createdAt: { gte: startDate, lte: endDate },
+          },
+        }),
+        notificationPrisma.emailNotification.count({
+          where: {
+            status: EMAIL_STATUS.SENT,
+            sentAt: { gte: startDate, lte: endDate },
+          },
+        }),
+      ]);
+      notificationsSentCount = notifs;
+      emailsSentCount = emails;
+    } catch {
+      // Fallback graceful khi notification database chưa khởi tạo hoặc standalone
+    }
 
     return {
       newUsersCount,

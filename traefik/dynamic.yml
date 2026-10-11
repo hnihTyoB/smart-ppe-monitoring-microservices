@@ -53,7 +53,7 @@ http:
   routers:
     # 1. Site Service (:8891)
     sites:
-      rule: "PathPrefix(`/api/v1/sites`) || PathPrefix(`/api/v1/zones`) || PathPrefix(`/api/v1/restricted-areas`)"
+      rule: "PathPrefix(`/api/v1/sites`) || PathPrefix(`/api/v1/zones`) || PathPrefix(`/api/v1/restricted-areas`) || PathPrefix(`/api/v1/safety-rules`)"
       entryPoints:
         - web
         - websecure

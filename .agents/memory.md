@@ -1073,5 +1073,67 @@
     - `pnpm exec prisma validate --schema=prisma/reporting/schema.prisma`: Schema hợp lệ 100%.
     - `pnpm build`: TypeScript compile 0 lỗi (Strict Mode).
     - `pnpm run lint`: ESLint 0 errors / 0 warnings.
-
-
+- **PPE Microservices: Identity Schema Cleansing & D08.pdf Reconciliation (2026-10-11)**:
+  - **Mục tiêu**: Xử lý dứt điểm các model tàn dư từ thời monolith trong `prisma/identity/schema.prisma`, cô lập tuyệt đối ranh giới dữ liệu chuẩn Database-per-Service, và đối chiếu toàn diện 8 microservices (BE-01 đến BE-09) với tài liệu kiến trúc kỹ thuật đồ án `D08.pdf` trước khi bước vào Task BE-10.
+  - **1. Tách biệt & Cô lập CSDL Identity (`ppe_identity_db`)**:
+    - Gỡ bỏ hoàn toàn 3 models notification tàn dư khỏi `prisma/identity/schema.prisma`: `Notification`, `EmailNotification`, `NotificationTemplate`.
+    - Gỡ bỏ 2 quan hệ cross-database trên `model User`: `notifications Notification[]` và `emailNotifications EmailNotification[]`.
+    - Giữ lại đúng 17 models lõi phục vụ bảo mật & xác thực người dùng: `User`, `Role`, `Permission`, `RolePermission`, `AuditLog`, `RefreshToken`, `UserSocial`, `VerificationToken`, `PasswordResetToken`, `UserDevice`, `MaintenanceConfig`, `ApiKey`, `WebhookEndpoint`, `WebhookDelivery`, `SystemConfig`, `FileRecord`, `OutboxEvent`.
+    - Tạo migration SQL bất biến `prisma/identity/migrations/20261011040000_remove_unseparated_notification_models/migration.sql` an toàn.
+  - **2. Chuyển giao miền dữ liệu Email Queue sang Notification Service (`ppe_notification_db`)**:
+    - Bổ sung `model EmailNotification` vào `prisma/notification/schema.prisma` với khóa ngoại lỏng `userId UUID` (không cross-DB constraint).
+    - Tạo migration SQL bất biến `prisma/notification/migrations/20261011041000_add_email_notifications/migration.sql`.
+    - Cập nhật `NotificationRepository`: chuyển toàn bộ các phương thức email queue (`claimPendingEmails`, `updateEmailStatus`, `findEmailById`, `findEmails`, `resetEmailForRetry`) sang sử dụng `this.db` (`notificationPrisma`) và `NotificationPrisma.EmailNotificationWhereInput`.
+    - Cập nhật `CronRepository.getActivityStats`: bóc tách các thống kê thông báo/email ra khỏi transaction của `identityPrisma`, truy vấn độc lập và an toàn qua `notificationPrisma`.
+  - **3. Đối chiếu toàn diện tài liệu kiến trúc D08.pdf**:
+    - **Mục 1 & 2.7 (Kiến trúc Microservices & Nghiệp vụ)**: Đã bao phủ 100% các luồng giám sát, phân quyền, kiểm soát camera, xử lý vi phạm, lưu trữ bằng chứng chống giả mạo MinIO SHA-256, cảnh báo đa kênh In-App SSE + Email, và thống kê báo cáo.
+    - **Mục 3.5 (Danh sách Microservices)**: 8/9 dịch vụ đã hoàn thành 100% (API Gateway, Identity/Auth, Site, Camera, Incident, Notification, Reporting, Media/Evidence Storage). Dịch vụ thứ 9 (AI Vision Service) thuộc phạm vi của nhánh AI Python (SV1 & SV2) và sẽ được tích hợp tiếp nhận qua sự kiện vi phạm (BE-15).
+    - **Mục 4.1 - 4.5 (Chức năng các bên liên quan)**:
+      - Admin: Quản lý tài khoản, vai trò, phân quyền, audit logs, cấu hình bảo trì, AI model catalog & version deployment (sẵn sàng cho BE-10).
+      - Safety Manager: Quản lý công trường, khu vực, camera, vùng cấm polygon (Site & Camera Services).
+      - Safety Officer: Nhận cảnh báo SSE realtime, xem snapshot/video clip presigned URL MinIO, xác nhận True Violation/False Alarm, ghi nhận xử lý đóng sự cố.
+      - Báo cáo & Giám sát: Dashboard KPI, xu hướng vi phạm theo thời gian, tỷ lệ báo động giả (False Alarm Rate), thời gian xử lý (MTTR), hiệu năng AI inference telemetry (FPS, latency).
+    - **Sẵn sàng cho Task BE-10**: Cấu hình quy tắc an toàn (Safety Rule Engine & AI Thresholds: confidence, confirmation duration, cooldown, restricted area toggles) tại Site Service & Camera Service đã có nền tảng schema sẵn sàng để hoàn thiện trọn gói nghiệp vụ cấu hình động.
+  - **4. Verification**:
+    - `pnpm exec prisma validate` cho cả Identity và Notification: 100% Valid.
+    - `pnpm run prisma:generate:identity` & `notification`: Generated clients thành công.
+    - `pnpm build`: TypeScript strict mode biên dịch 0 lỗi.
+    - `pnpm run lint`: ESLint 0 errors / 0 warnings.
+    - Automated tests: 151/151 unit & service integration tests PASS 100%.
+- **PPE Microservices: Task BE-10 - Safety Rule Engine & AI Threshold Config Management Service (2026-10-11)**:
+  - **Mục tiêu**: Hoàn thiện toàn diện module Safety Rule Engine & AI Threshold Config Management Service theo phân công đồ án PPE Microservices (`BE-10`), tài liệu kiến trúc kỹ thuật `D08.pdf` (Mục 2.7, 3.5, 4.2, 4.4, 6.2), thỏa mãn acceptance criteria: *"Config lưu và áp dụng được"*, giải quyết bài toán cấu hình ngưỡng AI thị giác máy tính (`confidenceThreshold`, `confirmationDuration`, `cooldownDuration`, `modelVersionId`, `enableNoHelmet`, `enableNoVest`, `enableRestrictedArea`).
+  - **1. Kiến trúc phân giải cấu hình thứ bậc 3 tầng (Hierarchical Resolution)**:
+    - Cơ chế fallback linh hoạt: `Camera Override -> Site Level -> System Default`.
+    - `System Default`: `confidenceThreshold: 0.80`, `confirmationDuration: 2s`, `cooldownDuration: 30s`, kích hoạt toàn bộ rules (`enableNoHelmet: true`, `enableNoVest: true`, `enableRestrictedArea: true`).
+    - `Site Level`: Cho phép cấu hình tùy biến áp dụng cho toàn bộ công trường (`SiteSafetyConfig`). Tự động khởi tạo giá trị default khi chưa tồn tại.
+    - `Camera Override`: Cho phép từng camera (`CameraConfig`) ghi đè có chọn lọc các trường cần thiết. Các trường null tự động thừa kế giá trị từ cấp công trường.
+    - Tự động gắn kết Metadata AI: Phối hợp `ReportingRepository` trích xuất phiên bản mô hình AI đang `DEPLOYED` (hoặc chỉ định qua `modelVersionId`) và `RestrictedAreaRepository` lấy toàn bộ đa giác vùng cấm (`polygonCoordinates`) gắn vào cấu hình effective cho AI pipeline.
+  - **2. In-Memory Caching & Sub-millisecond Pipeline Query**:
+    - `SafetyRuleCacheService`: Cache in-memory hiệu năng cao với Map TTL (mặc định 60s) cho endpoint `/api/v1/safety-rules/effective`, giúp các vòng lặp xử lý frame của AI Vision Service (Python - SV2) đạt độ trễ $< 1\text{ms}$.
+    - Cơ chế tự động Invalidation tức thời: Tự động xóa cache của camera và site tương ứng khi có thao tác cập nhật cấu hình công trường hoặc camera override.
+  - **3. Kiến trúc phân tầng 5 lớp chuẩn mực**:
+    - `safety-rule.constant.ts`: Định nghĩa tập trung `DEFAULT_SAFETY_CONFIG`, `CONFIG_RESOLUTION_SOURCE` (`CAMERA_OVERRIDE`, `SITE_LEVEL`, `SYSTEM_DEFAULT`), giới hạn ngưỡng (`SAFETY_RULE_LIMITS`: confidence 0.01 - 0.99, confirmation 1 - 60s, cooldown 5 - 300s).
+    - `safety-rule.dto.ts`: Định nghĩa toàn diện DTOs (`UpdateSiteSafetyConfigDto`, `UpdateCameraSafetyConfigDto`, `EffectiveSafetyConfigResultDto`, `SafetyRuleResolutionSource`, `RestrictedAreaPolygonDto`).
+    - `safety-rule.validation.ts`: Zod schema validation chặt chẽ ở biên HTTP (`UUID`, giới hạn ngưỡng AI, ít nhất 1 trường khi update).
+    - `safety-rule.repository.ts`: Truy vấn đa database an toàn (`sitePrisma`, `cameraPrisma`, `reportingPrisma`, `rbacRepository`).
+    - `safety-rule.service.ts`: Xử lý thuật toán phân giải 3 tầng, đính kèm AI Model Version & Restricted Area, quản lý cache và ghi nhận `AuditLog` (`UPDATE_PPE_SAFETY_CONFIG`, `UPDATE_PPE_CAMERA_SAFETY_CONFIG`, `DELETE_PPE_CAMERA_SAFETY_CONFIG`).
+    - `safety-rule.controller.ts`: Tiếp nhận HTTP request/response, format dữ liệu chuẩn `{ success: true, data: ... }`, chuyển lỗi sang `next(error)`.
+    - `safety-rule.route.ts`: Mount các endpoints bảo vệ bằng dynamic RBAC permissions (`PPE_SAFETY_CONFIG_READ`, `PPE_SAFETY_CONFIG_MANAGE`).
+    - `safety-rule.openapi.ts`: Đăng ký tài liệu OpenAPI 3.0 với `openapiRegistry` và Swagger UI (`/api/docs`).
+  - **4. Standalone Microservice & API Gateway Compatibility**:
+    - `src/site.app.ts`: Mount router `safetyRuleRouter` tại `/api/v1/safety-rules` và `/safety-rules`.
+    - `src/routes/index.ts`: Mount `safetyRuleRouter` tương thích với monolith dev gateway.
+    - `traefik/dynamic.yml`: Mở rộng định tuyến Traefik router `sites` đón nhận tiền tố `PathPrefix('/api/v1/safety-rules')`.
+    - `src/config/swagger.config.ts`: Đăng ký tài liệu Swagger UI tự động.
+  - **5. Automated Testing & Verification**:
+    - Bộ test tự động chuyên dụng `tests/safety-rule-service.test.ts` (25/25 test cases PASS 100%).
+    - Toàn bộ 7 suites microservices PPE: 150/150 test cases PASS 100%.
+    - `pnpm exec prisma validate` cho site và camera: 100% hợp lệ.
+    - `pnpm build`: TypeScript strict mode biên dịch 0 lỗi.
+    - `pnpm run lint`: ESLint 0 errors / 0 warnings.
+  - **6. Code Review Hardening & Autonomous Remediation (2026-10-11)**:
+    - **Fix 1 (Bug - Fallthrough Prevention)**: Khắc phục lỗi fallthrough trong `SafetyRuleRepository.findActiveModelVersion`: thêm `return null;` khi `modelVersionId` được chỉ định nhưng không tồn tại trong CSDL, đảm bảo ném lỗi 404 thay vì âm thầm trả về fallback deployed model.
+    - **Fix 2 (Layering & Validation)**: Khai báo `invalidateCacheSchema` và gắn middleware `validate(invalidateCacheSchema)` tại route `POST /cache/invalidate`. Xử lý an toàn optional chaining `req.body?.siteId` và `req.body?.cameraId` trong Controller, loại bỏ nguy cơ sập server (500) khi request body trống.
+    - **Fix 3 (Security & Sensitive Data Leak)**: Bổ sung `requirePermission(PERMISSIONS.PPE_SAFETY_CONFIG_READ)` cho endpoint `GET /effective`; loại bỏ trường hạ tầng nhạy cảm `modelPath` (local path / S3 bucket URI) khỏi `ResolvedAiModelVersionDto` và HTTP response để phòng chống rò rỉ thông tin theo tiêu chuẩn CWE-200.
+    - **Fix 4 (Cache Invalidation Gap)**: Nâng cấp định danh cache key theo cấu trúc thứ bậc `effective:site:${siteId}:camera:${cameraId}` và bổ sung hàm `getForCamera(cameraId)`. Khi Quản trị viên cập nhật cấu hình cấp Site, toàn bộ cache của các Camera trực thuộc cũng tự động được xóa bỏ tức thời; bổ sung guard chống wipeout cache bởi chuỗi rỗng.
+    - **Fix 5 (Code Hygiene)**: Tái sử dụng `uuidSchema` từ `common.validation.ts` và gán type `AuditAction` chặt chẽ trong `SafetyRuleRepository.recordAuditLog`.

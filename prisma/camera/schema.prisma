@@ -55,8 +55,15 @@ model CameraConfig {
   enabled           Boolean  @default(true)
   captureFps        Int      @default(10) @map("capture_fps")
   resolution        String   @default("1920x1080") @db.VarChar(30)
-  processingEnabled Boolean  @default(true) @map("processing_enabled")
-  createdAt         DateTime @default(now()) @map("created_at")
+  processingEnabled    Boolean  @default(true) @map("processing_enabled")
+  confidenceThreshold  Decimal? @map("confidence_threshold") @db.Decimal(5, 4)
+  confirmationDuration Int?     @map("confirmation_duration")
+  cooldownDuration     Int?     @map("cooldown_duration")
+  enableNoHelmet       Boolean? @map("enable_no_helmet")
+  enableNoVest         Boolean? @map("enable_no_vest")
+  enableRestrictedArea Boolean? @map("enable_restricted_area")
+  modelVersionId       String?  @map("model_version_id") @db.Uuid
+  createdAt            DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
 
   camera Camera @relation(fields: [cameraId], references: [id], onDelete: Cascade)

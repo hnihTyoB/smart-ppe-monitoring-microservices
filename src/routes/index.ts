@@ -17,6 +17,7 @@ import {
   zoneRouter,
   restrictedAreaRouter,
 } from "../modules/site/site.route";
+import { safetyRuleRouter } from "../modules/safety-rule/safety-rule.route";
 import {
   cameraRouter,
   cameraStreamRouter,
@@ -58,6 +59,7 @@ router.use("/files", fileRoute);
 router.use("/sites", siteRouter);
 router.use("/zones", zoneRouter);
 router.use("/restricted-areas", restrictedAreaRouter);
+router.use("/safety-rules", safetyRuleRouter);
 
 // PPE Camera Management Microservice Endpoints
 router.use("/cameras", cameraRouter);

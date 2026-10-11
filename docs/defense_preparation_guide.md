@@ -424,7 +424,60 @@
 
 ---
 
-## 🛠️ 9. CHECKLIST CHUẨN BỊ TRƯỚC GIỜ BẢO VỆ
+## ⚙️ 9. CHUYÊN ĐỀ SÂU: 5 CÂU HỎI VẤN ĐÁP TỪ MODULE SAFETY RULE & AI CONFIG ENGINE (TASK BE-10)
+
+### 🔹 Câu 43 (Task BE-10: `safety-rule.service.ts`): Thứ bậc Phân giải Cấu hình An toàn 3 Cấp (Hierarchical Resolution)
+* **Câu hỏi**: *"Trong một đại công trường, các vị trí đặt camera có mức độ rủi ro rất khác nhau (ví dụ: camera hố móng sâu cần độ nhạy cao và thời gian xác nhận vi phạm nhanh, trong khi camera cổng ra vào chỉ cần mức cảnh báo thông thường). Em đã thiết kế thứ bậc phân giải cấu hình an toàn (Hierarchical Configuration Resolution) như thế nào giữa Camera Override, Site Level và System Default? API cung cấp cho cụm AI Edge nhận biết nguồn cấu hình ra sao?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô, em thiết kế cơ chế phân giải cấu hình thứ bậc 3 cấp (3-Tier Hierarchical Resolution) chặt chẽ:  
+  > 1) **Cấp 1 (Ưu tiên cao nhất - `CAMERA_OVERRIDE`)**: Cấu hình ghi đè riêng cho từng camera (nằm tại `CameraConfig`), áp dụng cho các vị trí nguy hiểm đặc thù hoặc góc quay nhạy cảm cần tinh chỉnh ngưỡng riêng.  
+  > 2) **Cấp 2 (`SITE_LEVEL`)**: Cấu hình an toàn chung của toàn bộ công trường (`SiteSafetyConfig`) do Ban chỉ huy công trường thiết lập cho toàn thể cán bộ công nhân viên.  
+  > 3) **Cấp 3 (Hạ tầng an toàn - `SYSTEM_DEFAULT`)**: Hằng số an toàn mặc định của hệ thống (`confidence: 0.8, confirmation: 2s, cooldown: 30s`) đảm bảo camera luôn có cấu hình vận hành ngay cả khi cán bộ chưa kịp thiết lập.  
+  > API `GET /effective` tự động gom và đối soát từ trên xuống dưới, trả về cấu hình hiệu dụng cuối cùng kèm trường `source` (`CAMERA_OVERRIDE` | `SITE_LEVEL` | `SYSTEM_DEFAULT`) để AI Edge biết chính xác nguồn gốc áp dụng."*
+
+---
+
+### 🔹 Câu 44 (Task BE-10: `safety-rule.service.ts`): Tích hợp Toàn diện Ngữ cảnh AI (AI Model Version & Vùng cấm Polygon)
+* **Câu hỏi**: *"Đối với cụm xử lý AI biên (AI Edge Inferencing), việc nhận diện vi phạm đòi hỏi đồng thời: Ngưỡng lọc vi phạm, Metadata phiên bản mô hình AI (YOLO/TensorRT classes) và Tọa độ đa giác vùng cấm (Restricted Area Polygons). Tại sao em lại gom trọn vẹn các thông tin này vào một phản hồi duy nhất của `GET /safety-rules/effective`? Em kiểm soát tính toàn vẹn của Model Version như thế nào?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô, việc tích hợp toàn bộ vào một API duy nhất (`GET /safety-rules/effective`) giải quyết 3 bài toán trọng yếu của AI Pipeline:  
+  > 1) **Tính nhất quán nguyên tử (Atomic Snapshot)**: Cụm AI Edge nhận trọn vẹn ngữ cảnh thực thi (ngưỡng an toàn, đa giác vùng cấm theo Zone/Site, và metadata mô hình AI như `inputResolution`, `classes`) tại cùng một thời điểm, triệt tiêu `race-condition` giữa cấu hình và mô hình.  
+  > 2) **Tối ưu hóa độ trễ kết nối biên**: Loại bỏ `Network Chatter`, AI Edge chỉ cần 1 HTTP round-trip duy nhất khi khởi động hoặc reconnect luồng RTSP.  
+  > 3) **Thẩm định toàn vẹn Model**: Hệ thống bắt buộc `modelVersionId` phải tồn tại và đang kích hoạt (`isActive: true`) trong CSDL; nếu phiên bản mô hình bị vô hiệu hóa hoặc không hợp lệ, hệ thống từ chối cập nhật ngay từ tầng Service (trả về 404 NOT_FOUND)."*
+
+---
+
+### 🔹 Câu 45 (Task BE-10: `safety-rule-cache.service.ts`): Cấu trúc In-Memory Cache Phân cấp & Xóa Cache Bậc thang (Cascading Invalidation)
+* **Câu hỏi**: *"Tại sao việc lưu cache cấu hình an toàn hiệu dụng lại cần thiết cho cụm AI? Em đã thiết kế cấu trúc Cache Key và cơ chế Xóa cache bậc thang (Cascading Invalidation) như thế nào khi cấu hình ở cấp độ Công trường (Site) thay đổi để ngăn chặn triệt để hiện tượng dữ liệu cũ (Stale Cache) trên các camera con?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô:  
+  > 1) **Sự cần thiết của Cache**: Cụm AI Edge liên tục truy vấn cấu hình hiệu dụng khi khởi động lại luồng stream hoặc kiểm tra định kỳ; việc cache trên RAM (`SafetyRuleCacheService`) giúp phản hồi dưới 1ms, loại bỏ hoàn toàn tải truy vấn đa bảng (Site, Camera, AIModel, RestrictedArea) lên cơ sở dữ liệu.  
+  > 2) **Cấu trúc Cache Key phân cấp (Hierarchical Keying)**: `effective:site:{siteId}` cho cấu hình chung và `effective:site:{siteId}:camera:{cameraId}` cho từng camera.  
+  > 3) **Cascading Invalidation**: Khi cập nhật cấu hình Site, hàm `invalidateSite(siteId)` xóa sạch cả key của site lẫn toàn bộ các key có tiền tố `effective:site:{siteId}:camera:*`. Nhờ đó, mọi camera đang kế thừa cấu hình từ công trường lập tức được làm mới (Cache Busting) mà không bao giờ bị lưu dữ liệu cũ (Stale Cache). Ngược lại, khi cập nhật camera riêng lẻ, `invalidateCamera` chỉ xóa đúng cache của camera đó nhằm bảo toàn hiệu năng tối đa."*
+
+---
+
+### 🔹 Câu 46 (Task BE-10: `safety-rule.validation.ts`): Phòng thủ Biên Giới hạn (Zod Limits) & Cơ chế Hủy Ghi đè (Nullable Overrides)
+* **Câu hỏi**: *"Tại sao trong Zod Schema, em lại khống chế chặt chẽ giới hạn ngưỡng tin cậy 'confidenceThreshold' trong đoạn [0.01, 0.99] thay vì cho phép nhập 0 hoặc 1.0? Việc hỗ trợ giá trị 'null' trong Camera Safety Config giải quyết bài toán nghiệp vụ gì khi quản lý thiết bị?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô:  
+  > 1) **Giới hạn [0.01, 0.99] (Defense-in-depth)**: Trong mạng nơ-ron nhận diện ảnh, đầu ra Softmax/Sigmoid hiếm khi đạt 1.0 tuyệt đối. Nếu đặt ngưỡng bằng 1.0, hệ thống sẽ bị 'mù' hoàn toàn (bỏ sót 100% tai nạn). Ngược lại nếu đặt bằng 0, mọi nhiễu hình ảnh đều biến thành vi phạm gây bão cảnh báo làm sập hàng đợi. Do đó, Zod Schema khóa cứng ngưỡng trong khoảng `[0.01, 0.99]`, thời gian xác nhận `[1, 60]` giây và thời gian cooldown `[5, 300]` giây.  
+  > 2) **Cơ chế Nullable Overrides**: Khi cập nhật cấu hình camera, việc truyền `null` cho một trường cụ thể (hoặc gọi `DELETE /cameras/:id/safety-config`) cho phép người dùng hủy bỏ ghi đè trường đó để camera tự động quay về kế thừa (revert to inherit) giá trị từ Công trường (Site-level) mà không phải nhập lại dữ liệu thủ công, đồng thời có Audit Trail ghi nhận đầy đủ."*
+
+---
+
+### 🔹 Câu 47 (Task BE-10: Live Demo Safety Rule): Kịch bản Live Demo 2 phút luồng Safety Rule & Phân giải Hiệu dụng trên Swagger UI
+* **Câu hỏi**: *"Em hãy trình bày kịch bản Live Demo 2 phút trên Swagger UI để chứng minh: Cơ chế phân giải thứ bậc (Effective Resolution), Ghi đè từng phần cho Camera (Partial Override), Tự động xóa Cache thời gian thực và Khôi phục kế thừa khi hủy ghi đè?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Hội đồng, em xin demo kịch bản 4 bước thực chiến trong 2 phút trên Swagger UI (`/api/docs`):  
+  > 1. **Truy vấn kế thừa ban đầu**: Gọi `GET /api/v1/safety-rules/effective?cameraId={camId}`, chỉ ra trường `source: 'SITE_LEVEL'` kèm ngưỡng mặc định (0.8), danh sách đa giác vùng cấm `restrictedAreas` và `modelVersion` hợp lệ.  
+  > 2. **Thực hiện Partial Override**: Gọi `PUT /api/v1/safety-rules/cameras/{camId}` cập nhật `{ confidenceThreshold: 0.92, enableNoVest: false }`. Swagger trả về 200, tự động bust cache và ghi nhận Audit Log.  
+  > 3. **Kiểm chứng phân giải tức thời**: Gọi lại `GET /effective?cameraId={camId}`, hệ thống trả về `source: 'CAMERA_OVERRIDE'` với ngưỡng 0.92 mới nhưng vẫn giữ nguyên các quy tắc không bị override (như `enableNoHelmet: true`) từ Site, chứng minh cơ chế ghi đè từng phần hoạt động hoàn hảo.  
+  > 4. **Xóa override & Tự phục hồi**: Gọi `DELETE /api/v1/safety-rules/cameras/{camId}`, truy vấn lại `GET /effective` thấy cấu hình lập tức hoàn nguyên về `SITE_LEVEL` ban đầu mà không hề dính Stale Cache."*
+
+---
+
+## 🛠️ 10. CHECKLIST CHUẨN BỊ TRƯỚC GIỜ BẢO VỆ
 
 - [ ] **Môi trường máy tính**:
   - Đã nạp sẵn Docker images (`postgres:16-alpine`, `confluentinc/cp-kafka:7.5.0`, `provectuslabs/kafka-ui`, `minio/minio`).
@@ -442,4 +495,5 @@
 - [ ] **Terminal chuẩn bị sẵn**:
   - Cửa sổ 1: Đang chạy `docker compose -f docker-compose.infra.yml ps`.
   - Cửa sổ 2: Thư mục dự án sẵn sàng gõ `pnpm test`.
+
 
