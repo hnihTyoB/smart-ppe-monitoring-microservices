@@ -33,6 +33,7 @@ import {
   aiModelRouter,
 } from "../modules/reporting/reporting.route";
 import brokerRouter from "../modules/broker/broker.route";
+import reliabilityRouter from "../modules/reliability/reliability.route";
 
 const router = Router();
 
@@ -79,6 +80,9 @@ router.use("/ai-models", aiModelRouter);
 
 // PPE Message Broker & AI Ingestion Bridge Endpoints (Task BE-12)
 router.use("/broker", brokerRouter);
+
+// PPE Reliability & Idempotency Endpoints (Task BE-13)
+router.use("/reliability", reliabilityRouter);
 
 export default router;
 

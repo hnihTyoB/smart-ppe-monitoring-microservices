@@ -577,7 +577,59 @@
 
 ---
 
-## 🛠️ 12. CHECKLIST CHUẨN BỊ TRƯỚC GIỜ BẢO VỆ
+## 🛡️ 12. CHUYÊN ĐỀ SÂU: 5 CÂU HỎI VẤN ĐÁP TỪ MODULE ĐỘ TIN CẬY & RETRY VỚI JITTER (TASK BE-13: RELIABILITY ENGINE)
+
+### 🔹 Câu 58 (Task BE-13: `reliability.service.ts`): Exponential Backoff Kết Hợp Full Jitter & Chống Hiện Tượng "Đàn Bò Sấm Sét"
+* **Câu hỏi**: *"Khi hệ thống gặp sự cố mạng hoặc nghẽn CSDL tạm thời rồi vừa phục hồi, hiện tượng 'Đàn bò sấm sét' (Thundering Herd Problem) là gì? Em đã thiết kế thuật toán Thử lại lũy tiến có ngẫu nhiên hóa (Exponential Backoff with Full Jitter) như thế nào trong Reliability Service để bảo vệ hạ tầng không bị đánh sập lần thứ hai?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô, khi máy chủ CSDL hoặc mạng gặp sự cố tạm thời rồi phục hồi:  
+  > 1) **Hiểm họa 'Đàn bò sấm sét' (Thundering Herd)**: Nếu hàng trăm Worker cùng lúc retry theo một chu kỳ cố định (ví dụ: đúng 1s, 2s, 4s), tất cả các request sẽ đồng thanh dội ngược vào hệ thống tại cùng một mili-giây chính xác, tạo ra xung đỉnh lưu lượng (Traffic Spike) làm sập lại máy chủ vừa hồi phục.  
+  > 2) **Thuật toán Exponential Backoff kết hợp Full Jitter**: Em áp dụng công thức:  
+  >    $$T_{\text{wait}} = \min(InitialDelay \times 2^{\text{attempt} - 1}, MaxDelay) \times (1 \pm \text{Random}(0, JitterFactor))$$  
+  >    Với `InitialDelay = 1000ms`, `Factor = 2`, `MaxDelay = 30000ms` và `JitterFactor = 0.25`. Yếu tố ngẫu nhiên Jitter làm phân tán đều các lần thử lại trên trục thời gian, 'làm mịn' đỉnh tải lưu lượng và giúp cơ sở dữ liệu phục hồi an toàn mà không bị nghẽn tải thứ cấp."*
+
+---
+
+### 🔹 Câu 59 (Task BE-13: `reliability.constant.ts`): Phân Loại Lỗi 2 Pha (Transient vs Permanent) & Nguyên Lý Thất Bại Sớm (Fail-Fast)
+* **Câu hỏi**: *"Tại sao việc phân loại lỗi thành Transient Error (Lỗi tạm thời) và Permanent Error (Lỗi vĩnh viễn / Poison Pill) lại mang tính sống còn đối với hiệu năng của Message Broker? Nguyên lý Thất bại sớm (Fail-Fast) giải quyết hiện tượng Tắc nghẽn đầu hàng đợi (Head-of-Line Blocking) ra sao?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô, em thiết kế cơ chế Phân loại lỗi 2 pha (Two-Phase Error Classification) tuân thủ nguyên lý Thất bại sớm (Fail-Fast):  
+  > 1) **Transient Error (Lỗi quá độ)**: Bao gồm đứt kết nối mạng tạm thời (`ETIMEDOUT`, `ECONNRESET`), DB deadlock (`40P01`), nghẽn lock hoặc HTTP `503/429`. Đây là các lỗi có xác suất thành công cao khi thử lại, nên hệ thống áp dụng Exponential Backoff tối đa 3 lần.  
+  > 2) **Permanent Error / Poison Pill (Lỗi vĩnh viễn)**: Bao gồm lỗi sai cấu trúc Zod Schema (thiếu trường, sai định dạng UUID), HTTP `400`, cú pháp JSON hỏng. Những lỗi này thử lại bao nhiêu lần cũng vô ích. Nếu tiếp tục retry, worker sẽ gây tắc nghẽn đầu hàng đợi (Head-of-Line Blocking) làm kẹt hàng ngàn sự cố phía sau.  
+  > **Giải pháp Fail-Fast**: Hệ thống nhận diện lỗi vĩnh viễn, lập tức ngắt chu kỳ retry (Halting Retry) ngay lần đầu và chuyển thẳng vào DLQ để giải phóng hàng đợi tức thời."*
+
+---
+
+### 🔹 Câu 60 (Task BE-13: `prisma/incident/schema.prisma`): Tối Ưu B-Tree Index `@@index([violationId])` Cho Idempotency
+* **Câu hỏi**: *"Trong `prisma/incident/schema.prisma`, tại sao em lại chủ động tạo migration bổ sung chỉ mục `@@index([violationId])` cho bảng `incidents`? Nếu thiếu chỉ mục này, cơ chế kiểm tra chống trùng lặp (Idempotency Check) của Worker sẽ gây suy sụp hiệu năng CSDL như thế nào khi dữ liệu đạt quy mô hàng triệu bản ghi?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô, việc bổ sung B-Tree `@@index([violationId])` là tối ưu hóa sống còn cho cơ chế Idempotent Consumer:  
+  > 1) **Hậu quả khi thiếu Index (Full Table Scan $O(N)$)**: Khi Kafka đẩy sự kiện đến, `IncidentConsumer` bắt buộc kiểm tra xem `violationId` đã tồn tại chưa. Không có index, PostgreSQL phải quét tuần tự (Sequential Scan) toàn bộ bảng `incidents`. Khi dữ liệu tích tụ hàng trăm ngàn bản ghi, mỗi frame vi phạm đều ép CSDL đọc toàn bộ đĩa, đẩy CPU lên 100% và tăng độ trễ từ 1ms lên hàng trăm mili-giây làm nghẽn toàn bộ hệ thống.  
+  > 2) **Hiệu quả với Index (Index Scan $O(\log N)$)**: Có chỉ mục giúp truy vấn kiểm tra trùng lặp hoàn thành tức thời dưới 1ms ($O(\log N)$), triệt tiêu nghẽn I/O và đảm bảo khả năng tiếp nhận tải cao (High Throughput) khi hàng chục camera AI cùng gửi dữ liệu đồng thời."*
+
+---
+
+### 🔹 Câu 61 (Task BE-13: `reliability.service.ts`): Khả Năng Quan Sát (Observability & Telemetry Metrics) & Quản Trị Khóa Idempotency
+* **Câu hỏi**: *"Trong môi trường sản xuất thực tế, làm thế nào đội ngũ kỹ sư vận hành (DevOps / SRE) biết được mạng công trường đang bị chập chờn hay hệ thống đang hứng chịu bão gói tin trùng lặp? Em đã thiết kế hệ thống Giám sát Độ tin cậy (Observability & Telemetry Metrics) và Quản trị vòng đời khóa Idempotency ra sao?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô, em thiết kế hệ thống Giám sát & Quản trị độ tin cậy phân tán chuyên nghiệp:  
+  > 1) **Telemetry Metrics (`GET /api/v1/reliability/metrics`)**: Xuất ra các chỉ số đo đạc thời gian thực gồm: `deduplicatedEvents` (số sự kiện trùng lặp đã chặn đứng), `transientRetries` (số lần retry do rớt mạng/DB lock), `retrySuccesses` (số sự kiện tự chữa lành thành công sau retry), `permanentFailures` (số poison pill bị cách ly ngay lập tức) và `activeIdempotencyKeys`. Các metrics này giúp SRE phát hiện sớm suy giảm hiệu năng trước khi người dùng kịp phàn nàn.  
+  > 2) **Quản trị Khóa Idempotency linh hoạt (`GET` & `DELETE /api/v1/reliability/idempotency-keys`)**: Cho phép tra cứu các khóa đang active và dọn dẹp có chọn lọc theo prefix (ví dụ: purge các khóa của 'notification' khi cần test lại) hoặc `olderThanMs`, giúp chủ động re-test hoặc can thiệp khẩn cấp mà không phải chờ hết hạn 24 giờ."*
+
+---
+
+### 🔹 Câu 62 (Task BE-13: Live Demo Reliability Engine): Kịch bản Live Demo 2 phút trên Swagger UI & Trình duyệt
+* **Câu hỏi**: *"Em hãy trình bày kịch bản Live Demo 2 phút trên Swagger UI để chứng minh trước Hội đồng: Giám sát chỉ số Telemetry Metrics thời gian thực, Cơ chế triệt tiêu gói tin trùng lặp (Idempotent Deduplication), Khả năng Thất bại sớm (Fail-Fast) trước Poison Pill, và Quản trị xóa khóa Idempotency theo tiền tố?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Hội đồng, em xin demo kịch bản 4 bước thực chiến trong 2 phút trên Swagger UI (`/api/docs`):  
+  > 1. **Khảo sát Telemetry Ban đầu**: Gọi `GET /api/v1/reliability/metrics` trên Swagger, minh chứng các chỉ số giám sát độ tin cậy thời gian thực (`deduplicatedEvents`, `activeIdempotencyKeys`).  
+  > 2. **Kiểm chứng Chặn trùng lặp tức thời**: Gửi `POST /api/v1/broker/ingest/violation` tạo sự cố thành công (HTTP 202). Bấm gửi lại y hệt gói tin đó lần 2: Hệ thống lập tức nhận diện trùng và bỏ qua. Kiểm tra lại `GET /metrics` thấy `deduplicatedEvents` tăng lên 1, chứng minh không có sự cố rác được tạo trong CSDL.  
+  > 3. **Kiểm chứng Fail-Fast Poison Pill**: Gửi gói tin vi phạm sai schema (`violationId` không phải UUID). Thay vì chờ đợi lãng phí 30s retry, hệ thống ngắt ngay trong 2ms, tăng `permanentFailures` và chuyển vào DLQ, bảo vệ hàng đợi thông suốt.  
+  > 4. **Quản trị Dọn dẹp Khóa Chọn lọc**: Gọi `DELETE /api/v1/reliability/idempotency-keys` với prefix `ppe:violation`, xóa thành công khóa đã lưu. Gửi lại gói tin ban đầu: Hệ thống tiếp nhận xử lý bình thường, chứng minh năng lực can thiệp và kiểm soát phân tán 100%."*
+
+---
+
+## 🛠️ 13. CHECKLIST CHUẨN BỊ TRƯỚC GIỜ BẢO VỆ
 
 - [ ] **Môi trường máy tính**:
   - Đã nạp sẵn Docker images (`postgres:16-alpine`, `confluentinc/cp-kafka:7.5.0`, `provectuslabs/kafka-ui`, `minio/minio`).
@@ -595,6 +647,7 @@
 - [ ] **Terminal chuẩn bị sẵn**:
   - Cửa sổ 1: Đang chạy `docker compose -f docker-compose.infra.yml ps`.
   - Cửa sổ 2: Thư mục dự án sẵn sàng gõ `pnpm test`.
+
 
 
 

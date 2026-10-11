@@ -39,14 +39,29 @@ import {
   calculatePaginationSkip,
   formatPaginationMeta,
 } from "../../common/helpers/pagination.helper";
+import {
+  reliabilityService,
+  ReliabilityService,
+} from "../reliability/reliability.service";
+import {
+  IDEMPOTENCY_REASON,
+  RETRY_POLICY,
+} from "../../common/constants/reliability.constant";
 
 export class BrokerService {
   private readonly bus: EventBusService;
   private readonly audit: AuditService;
+  private readonly reliability: ReliabilityService;
 
-  constructor(bus?: EventBusService, audit?: AuditService) {
+  constructor(
+    bus?: EventBusService,
+    audit?: AuditService,
+    reliability?: ReliabilityService,
+  ) {
     this.bus = bus || eventBus;
     this.audit = audit || auditService;
+    this.reliability =
+      reliability || (bus ? new ReliabilityService() : reliabilityService);
   }
 
   /**
@@ -141,13 +156,45 @@ export class BrokerService {
       };
     }
 
-    // 2. Kiểm tra tính Idempotent (Chống trùng lặp trong 24 giờ)
-    const isEventDuplicate =
+    // 2. Khử trùng lặp đa tầng (Multi-Layer Idempotency Defense - Task BE-13):
+    // 2.1. Kiểm tra Exact eventId
+    const eventIdCheck = this.reliability.checkAndAcquireIdempotency(
+      eventId,
+      IDEMPOTENCY_REASON.EXACT_EVENT_ID,
+    );
+
+    // 2.2. Kiểm tra Exact violationId (nếu có)
+    const violationIdCheck = payload.violationId
+      ? this.reliability.checkAndAcquireIdempotency(
+          payload.violationId,
+          IDEMPOTENCY_REASON.EXACT_VIOLATION_ID,
+        )
+      : { isDuplicate: false };
+
+    // 2.3. Nếu không có violationId, sử dụng Business Fingerprint Cooldown (chống AI frame jitter)
+    let bizCheck = { isDuplicate: false };
+    const bizKey = this.reliability.computeBusinessDedupKey(payload);
+    if (!payload.violationId) {
+      bizCheck = this.reliability.checkAndAcquireIdempotency(
+        bizKey,
+        IDEMPOTENCY_REASON.BUSINESS_FINGERPRINT_COOLDOWN,
+        RETRY_POLICY.DEFAULT_COOLDOWN_WINDOW_MS,
+      );
+    }
+
+    // 2.4. Kết hợp kiểm tra bộ nhớ đệm EventBus
+    const isBusDuplicate =
       this.bus.isEventAlreadyProcessed(eventId) ||
       (payload.violationId &&
         this.bus.isEventAlreadyProcessed(payload.violationId));
 
-    if (isEventDuplicate) {
+    const isDuplicate =
+      eventIdCheck.isDuplicate ||
+      violationIdCheck.isDuplicate ||
+      bizCheck.isDuplicate ||
+      Boolean(isBusDuplicate);
+
+    if (isDuplicate) {
       return {
         success: true,
         eventId,
@@ -169,10 +216,21 @@ export class BrokerService {
       },
     );
 
-    // Đánh dấu cả eventId và violationId đã được tiếp nhận
+    // Đánh dấu hoàn tất Idempotency trong ReliabilityService và EventBus
+    this.reliability.completeIdempotency(eventId);
     this.bus.markEventProcessed(eventId);
+
     if (payload.violationId) {
+      this.reliability.completeIdempotency(payload.violationId);
       this.bus.markEventProcessed(payload.violationId);
+    }
+    if (!payload.violationId) {
+      this.reliability.completeIdempotency(
+        bizKey,
+        null,
+        undefined,
+        RETRY_POLICY.DEFAULT_COOLDOWN_WINDOW_MS,
+      );
     }
 
     // 4. Ghi nhận dấu vết kiểm toán (Non-blocking)

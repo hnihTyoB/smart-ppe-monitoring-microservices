@@ -62,6 +62,22 @@ export class IncidentRepository {
   async createIncident(data: CreateIncidentDto, actorId: string) {
     return this.db.$transaction(
       async (tx: any) => {
+        // Phòng thủ cấp CSDL (Task BE-13): Nếu violationId đã tồn tại trong DB, tái sử dụng bản ghi cũ
+        if (data.violationId) {
+          const existing = await tx.incident.findFirst({
+            where: { violationId: data.violationId },
+            include: {
+              evidences: { include: { metadata: true } },
+              statusHistory: { orderBy: { changedAt: "desc" } },
+              assignments: true,
+              comments: true,
+            },
+          });
+          if (existing) {
+            return serializeIncident(existing);
+          }
+        }
+
         const initialStatus = data.status || INCIDENT_STATUS.PENDING_REVIEW;
 
         const incident = await tx.incident.create({

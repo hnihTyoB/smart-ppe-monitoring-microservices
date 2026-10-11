@@ -30,6 +30,7 @@ model Incident {
   @@index([siteId, status, detectedAt])
   @@index([cameraId, detectedAt])
   @@index([status])
+  @@index([violationId])
   @@map("incidents")
 }
 

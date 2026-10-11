@@ -1203,3 +1203,37 @@
     - **Test Coverage**: Bộ test chuyên dụng `tests/message-broker-service.test.ts`: **24/24 test cases PASS 100%**.
     - `pnpm build`: TypeScript strict mode biên dịch sạch 0 lỗi.
     - `pnpm run lint`: ESLint 0 errors / 0 warnings.
+- **PPE Microservices: Task BE-13 - Reliability Service (Retry + Idempotency Engine) (2026-10-12)**:
+  - **Mục tiêu**: Hoàn thiện toàn diện Task `BE-13` (Module `Reliability`, Owner `SV3`, Priority `P0`) theo phân công đồ án PPE Microservices, thỏa mãn acceptance criteria: *"Duplicate event không tạo duplicate incident"*, xây dựng cơ chế phục hồi lỗi (Retry Policy) và kiểm soát trùng lặp đa tầng cho toàn bộ hệ thống xử lý sự kiện vi phạm an toàn lao động.
+  - **1. Kiến trúc Khử Trùng Lặp Đa Tầng (Multi-Layer Idempotency Defense)**:
+    - **Tầng 1 (Ingestion Deduplication)**: Kiểm tra `eventId` (UUIDv7), `payload.violationId` và **Business Fingerprint Cooldown** (`biz:${siteId}:${cameraId}:${trackId}:${violationType}`) với sliding cooldown window chống hiện tượng AI frame jitter (phát hiện liên tiếp 15-30 FPS cho cùng một công nhân). Phản hồi HTTP 200 `{ status: "DUPLICATE_SKIPPED", duplicate: true }` ngay tại biên, không đẩy duplicate vào hàng đợi.
+    - **Tầng 2 (Atomic Concurrency Mutex Lock)**: Khóa đồng thời nguyên tử `atomicAcquire` theo `inc:${violationId}`. Khi có 10–20 requests trùng lặp bắn tới đồng thời (`Promise.all`), Mutex chỉ cấp phép duy nhất 1 luồng thực thi (`PROCESSING`), các luồng còn lại nhận diện in-flight duplicate an toàn. Tự động giải phóng khóa (Stale Lock Auto-Release) sau 10 giây nếu worker crash nhằm chống deadlock.
+    - **Tầng 3 (Consumer Group Isolation)**: Tách biệt key của 4 Consumer Groups (`inc:`, `notif:`, `report:`, `audit:`). Lỗi hoặc retry ở Notification Service không bao giờ kích hoạt lại Incident Consumer (Fault Isolation & Consumer Isolation).
+    - **Tầng 4 (Retry Engine with Exponential Backoff & Full Jitter)**:
+      - Phân loại lỗi `classifyError`:
+        - `TRANSIENT` (DB timeout, lock 40P01, pool exhaustion P2024, network timeout, 503) $\rightarrow$ Tự động thử lại với Exponential Backoff kèm Full Jitter: $delay = \min(initial \times 2^{attempt-1}, max) \pm jitter$.
+        - `PERMANENT` / Poison Pill (Validation failure, invalid UUID, 400 Bad Request) $\rightarrow$ Dừng retry ngay lập tức, cách ly thẳng vào Dead-Letter Queue (DLQ), triệt tiêu hoàn toàn nghẽn hàng đợi (Head-of-Line blocking).
+      - Khi retry quá `maxAttempts` (3 lần) $\rightarrow$ Đẩy vào DLQ với status `PENDING` và reason `TRANSIENT_EXHAUSTED`.
+    - **Tầng 5 (Database-Level Defense)**: Kiểm tra phòng thủ trong transaction `createIncident` của `IncidentRepository`, tái sử dụng bản ghi cũ nếu `violationId` đã tồn tại thay vì gây xung đột hoặc crash CSDL.
+  - **2. Module `Reliability` Chuẩn Clean Architecture (`src/modules/reliability/`)**:
+    - `reliability.constant.ts`: Định nghĩa tập trung `IDEMPOTENCY_STATUS`, `IDEMPOTENCY_REASON`, `RETRY_POLICY`, `ERROR_CATEGORY`, `RELIABILITY_LIMITS`.
+    - `reliability.dto.ts`: DTOs cho check idempotency, key queries, telemetry metrics, và purge keys.
+    - `reliability.validation.ts`: Zod schema validation ở biên HTTP cho `idempotencyKeyQuerySchema` và `purgeIdempotencyKeysSchema`.
+    - `reliability.repository.ts`: Lưu trữ bộ nhớ đệm Idempotency Keys (tối đa 20.000 keys kèm LRU eviction), Atomic Concurrency Mutex Lock, quản lý vòng đời và TTL 24h.
+    - `reliability.service.ts`: Xử lý nghiệp vụ Business Fingerprint, `checkAndAcquireIdempotency`, `completeIdempotency`, `classifyError`, `executeWithRetry`, và tổng hợp số liệu telemetry thời gian thực.
+    - `reliability.controller.ts`: Controller phục vụ các endpoints `getMetrics`, `listKeys`, `purgeKeys`.
+    - `reliability.route.ts`: Mount `/api/v1/reliability`, bảo vệ bằng `authMiddleware`, `requirePermission(PERMISSIONS.PPE_RELIABILITY_READ)` và `requirePermission(PERMISSIONS.PPE_RELIABILITY_MANAGE)`.
+    - `reliability.openapi.ts`: Tự động đăng ký OpenAPI Swagger documentation 3.0 với `openapiRegistry`.
+  - **3. Open-Code-Review Remediation & Hardening (2026-10-12)**:
+    - **Layering Boundary Fix**: Gỡ bỏ gọi lại `idempotencyKeyQuerySchema.parse` và `purgeIdempotencyKeysSchema.parse` trong `ReliabilityController`; Controller đọc trực tiếp `req.query` và `req.body` đã được validate ở middleware; gỡ bỏ ép kiểu `any` bằng `req.user?.id`.
+    - **Query Coercion Robustness**: Cập nhật `idempotencyKeyQuerySchema` sang `z.coerce.number()`, hỗ trợ phân tích an toàn cả chuỗi query string và kiểu number từ middleware.
+    - **Pagination Meta Bug Fix**: Sửa `listIdempotencyKeys` trong `ReliabilityService` fallback về `RELIABILITY_LIMITS.DEFAULT_PAGE_SIZE` (20) thay vì `DEFAULT_MAX_ATTEMPTS` (3).
+    - **Duplicate DLQ Prevention**: Bỏ `throw err` trong `handleIncidentConsumer` catch block của `PpeViolationSubscriber`, ngăn chặn lặp lại retry kép giữa Reliability Service và InMemoryQueue dẫn đến 4 lần gửi DLQ cho cùng một sự kiện.
+    - **Audit Log Visibility**: Thay thế `.catch(() => {})` trong `ReliabilityService.purgeKeys` bằng `.catch((err) => console.warn(...))`.
+    - **Idempotency Rejection Guard**: Thêm kiểm tra `IDEMPOTENCY_STATUS.DUPLICATE_REJECTED` vào `ReliabilityRepository.atomicAcquire`.
+    - **Telemetry & Broker Hygiene**: Chỉ đánh dấu hoàn tất cooldown fingerprint `bizKey` khi `!payload.violationId`.
+  - **4. Test Coverage & Automated Verification (2026-10-12)**:
+    - Bộ test chuyên dụng `tests/reliability-retry-idempotency.test.ts`: Mở rộng thêm integration test cases cho Controller & Router, **18/18 test cases PASS 100%**.
+    - Bộ test Broker `tests/message-broker-service.test.ts`: **24/24 test cases PASS 100%**.
+    - Bộ test Incident `tests/incident-service.test.ts`: **30/30 test cases PASS 100%**.
+    - `pnpm build`: TypeScript strict mode biên dịch sạch 0 lỗi.
