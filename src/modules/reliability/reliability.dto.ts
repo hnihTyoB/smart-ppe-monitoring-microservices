@@ -96,3 +96,17 @@ export interface ClassifiedError {
   originalError: unknown;
   isRetryable: boolean;
 }
+
+export interface TraceStageDto {
+  stage: string;
+  status: string;
+  timestamp: number;
+  details?: Record<string, unknown>;
+}
+
+export interface TraceTimelineDto {
+  traceId: string;
+  timestamp: number;
+  eventsCount: number;
+  stages: TraceStageDto[];
+}

@@ -48,3 +48,18 @@ export const RELIABILITY_LIMITS = {
   MAX_PAGE_SIZE: 100,
   MAX_STORED_KEYS: 20000,
 } as const;
+
+export const TRACE_STAGE = {
+  DEAD_LETTER_QUEUE: "DEAD_LETTER_QUEUE",
+  IDEMPOTENCY_MUTEX: "IDEMPOTENCY_MUTEX",
+  AUDIT_LOG: "AUDIT_LOG",
+} as const;
+
+export type TraceStage = keyof typeof TRACE_STAGE;
+
+export const TRACE_STAGE_STATUS = {
+  PENDING: "PENDING",
+  RECORDED: "RECORDED",
+} as const;
+
+export type TraceStageStatus = keyof typeof TRACE_STAGE_STATUS;

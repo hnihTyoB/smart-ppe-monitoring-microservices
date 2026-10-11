@@ -5,6 +5,8 @@ import {
   ERROR_CATEGORY,
   IdempotencyReason,
   IdempotencyStatus,
+  TRACE_STAGE,
+  TRACE_STAGE_STATUS,
 } from "../../common/constants/reliability.constant";
 import {
   IdempotencyCheckResultDto,
@@ -15,7 +17,10 @@ import {
   IdempotencyKeyItemDto,
   RetryOptions,
   ClassifiedError,
+  TraceTimelineDto,
+  TraceStageDto,
 } from "./reliability.dto";
+import { getTraceId } from "../../common/context/trace-context";
 import {
   ReliabilityRepository,
   reliabilityRepository,
@@ -30,9 +35,16 @@ import { ERROR_CODE } from "../../common/errors/error-code";
 import type { PPEViolationDetectedPayload } from "../../common/types/kafka-event.type";
 import { formatPaginationMeta } from "../../common/helpers/pagination.helper";
 
+import {
+  eventBus,
+  EventBusService,
+  DlqRecord,
+} from "../../common/services/event-bus.service";
+
 export class ReliabilityService {
   private readonly repo: ReliabilityRepository;
   private readonly audit: AuditService;
+  private readonly bus: EventBusService;
 
   // Telemetry Counters
   private totalEventsReceived = 0;
@@ -50,9 +62,14 @@ export class ReliabilityService {
   private totalDlqPoisonPills = 0;
   private totalDlqTransientExhausted = 0;
 
-  constructor(repo?: ReliabilityRepository, audit?: AuditService) {
+  constructor(
+    repo?: ReliabilityRepository,
+    audit?: AuditService,
+    bus?: EventBusService,
+  ) {
     this.repo = repo || reliabilityRepository;
     this.audit = audit || auditService;
+    this.bus = bus || eventBus;
   }
 
   /**
@@ -281,8 +298,11 @@ export class ReliabilityService {
           const jitter = rawDelay * jitterFactor * (Math.random() * 2 - 1);
           const actualDelay = Math.max(10, Math.floor(rawDelay + jitter));
 
+          const currentTraceId = getTraceId();
+          const traceTag = currentTraceId ? `[Trace: ${currentTraceId}] ` : "";
+
           console.warn(
-            `[ReliabilityService] 🔄 Retry attempt ${attempt}/${maxAttempts} for [${taskName}] after ${actualDelay}ms. Reason: ${classified.message}`,
+            `[ReliabilityService] ${traceTag}🔄 Retry attempt ${attempt}/${maxAttempts} for [${taskName}] after ${actualDelay}ms. Reason: ${classified.message}`,
           );
 
           await new Promise((resolve) => setTimeout(resolve, actualDelay));
@@ -381,6 +401,94 @@ export class ReliabilityService {
       },
       cacheMetrics: this.repo.getCacheMetrics(),
       timestamp: Date.now(),
+    };
+  }
+
+  /**
+   * Tra cứu hành trình E2E Timeline của một traceId (Acceptance Criteria BE-14)
+   */
+  public async getTraceTimeline(traceId: string): Promise<TraceTimelineDto> {
+    const stages: TraceStageDto[] = [];
+
+    // 1. Kiểm tra các sự kiện Dead-Letter Queue (DLQ)
+    const dlqRecords = this.bus
+      .getDlqEvents()
+      .filter(
+        (r: DlqRecord) =>
+          r.envelope.traceId === traceId || r.envelope.id === traceId,
+      );
+    for (const r of dlqRecords) {
+      stages.push({
+        stage: TRACE_STAGE.DEAD_LETTER_QUEUE,
+        status: (r.status as string) || TRACE_STAGE_STATUS.PENDING,
+        timestamp: r.failedAt,
+        details: {
+          topic: r.envelope.name,
+          error: r.error,
+          attempts: r.attempts,
+          reprocessedAt: r.reprocessedAt,
+        },
+      });
+    }
+
+    // 2. Kiểm tra Idempotency Keys liên quan
+    const relatedKeys = this.repo.findKeysByPattern(traceId);
+    for (const k of relatedKeys) {
+      stages.push({
+        stage: TRACE_STAGE.IDEMPOTENCY_MUTEX,
+        status: k.status,
+        timestamp: k.createdAt,
+        details: {
+          key: k.key,
+          reason: k.reason,
+          attempts: k.attempts,
+          lastError: k.lastError,
+        },
+      });
+    }
+
+    // 3. Kiểm tra Audit Logs
+    const auditLogs = await this.repo.findAuditLogsByTraceId(traceId);
+    for (const a of auditLogs) {
+      // Sanitize details: loại bỏ các thông tin nhạy cảm (token, mật khẩu, authorization header)
+      let sanitizedDetails: Record<string, unknown> | undefined;
+      if (a.details && typeof a.details === "object") {
+        const raw = a.details as Record<string, unknown>;
+        const {
+          password,
+          token,
+          secret,
+          authorization,
+          refreshToken,
+          accessToken,
+          apiKey,
+          ...safeDetails
+        } = raw;
+        sanitizedDetails = safeDetails;
+      }
+
+      stages.push({
+        stage: TRACE_STAGE.AUDIT_LOG,
+        status: TRACE_STAGE_STATUS.RECORDED,
+        timestamp: new Date(a.createdAt).getTime(),
+        details: {
+          action: a.action,
+          targetType: a.targetType,
+          targetId: a.targetId,
+          actorId: a.actorId,
+          details: sanitizedDetails,
+        },
+      });
+    }
+
+    // Sắp xếp các chặng theo mốc thời gian tăng dần
+    stages.sort((a, b) => a.timestamp - b.timestamp);
+
+    return {
+      traceId,
+      timestamp: Date.now(),
+      eventsCount: stages.length,
+      stages,
     };
   }
 

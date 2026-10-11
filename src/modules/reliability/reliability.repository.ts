@@ -14,6 +14,11 @@ import {
 import {
   calculatePaginationSkip,
 } from "../../common/helpers/pagination.helper";
+import {
+  AuditRepository,
+  auditRepository,
+} from "../audit/audit.repository";
+import { AuditLogItemDto } from "../audit/audit.dto";
 
 export interface IdempotencyRecord {
   key: string;
@@ -31,6 +36,11 @@ export interface IdempotencyRecord {
 export class ReliabilityRepository {
   private readonly store = new Map<string, IdempotencyRecord>();
   private readonly maxCapacity = RELIABILITY_LIMITS.MAX_STORED_KEYS;
+  private readonly auditRepo: AuditRepository;
+
+  constructor(auditRepo?: AuditRepository) {
+    this.auditRepo = auditRepo || auditRepository;
+  }
 
   /**
    * Tra cứu bản ghi Idempotency theo khóa
@@ -310,6 +320,28 @@ export class ReliabilityRepository {
         }
       }
     }
+  }
+
+  /**
+   * Tìm các khóa idempotency theo từ khóa/pattern
+   */
+  public findKeysByPattern(pattern: string): IdempotencyRecord[] {
+    const results: IdempotencyRecord[] = [];
+    for (const [k, v] of this.store.entries()) {
+      if (k.includes(pattern)) {
+        results.push(v);
+      }
+    }
+    return results;
+  }
+
+  /**
+   * Tra cứu các bản ghi AuditLog liên kết với traceId (Ủy quyền cho AuditRepository)
+   */
+  public async findAuditLogsByTraceId(
+    traceId: string,
+  ): Promise<AuditLogItemDto[]> {
+    return this.auditRepo.findByTraceId(traceId);
   }
 }
 

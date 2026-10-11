@@ -32,3 +32,14 @@ export const purgeIdempotencyKeysSchema = z.object({
 });
 
 export type PurgeIdempotencyKeysInput = z.infer<typeof purgeIdempotencyKeysSchema>;
+
+export const traceParamSchema = z.object({
+  traceId: z
+    .string({ required_error: "Mã traceId là bắt buộc" })
+    .trim()
+    .min(1, "Mã traceId không được để trống")
+    .max(128, "Mã traceId tối đa 128 ký tự")
+    .regex(/^[a-zA-Z0-9_-]{1,128}$/, "Định dạng traceId không hợp lệ"),
+});
+
+export type TraceParamInput = z.infer<typeof traceParamSchema>;

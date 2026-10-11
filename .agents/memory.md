@@ -1237,3 +1237,47 @@
     - Bộ test Broker `tests/message-broker-service.test.ts`: **24/24 test cases PASS 100%**.
     - Bộ test Incident `tests/incident-service.test.ts`: **30/30 test cases PASS 100%**.
     - `pnpm build`: TypeScript strict mode biên dịch sạch 0 lỗi.
+- **PPE Microservices: Task BE-14 - Correlation & Error Handling (Distributed Tracing & RFC Problem Details) (2026-10-12)**:
+  - **Mục tiêu**: Hoàn thiện toàn diện Task `BE-14` (Module `Reliability`, Owner `SV3`, Priority `P1`) theo phân công đồ án PPE Microservices, thỏa mãn acceptance criteria: *"Trace được E2E request/event"*.
+  - **1. Trace Context Engine & AsyncLocalStorage (`src/common/context/trace-context.ts`)**:
+    - Quản lý vòng đời `TraceContextData` (`traceId`, `correlationId`, `requestId`, `actorId`, `source`, `startTime`, `tags`) xuyên suốt toàn bộ chuỗi async operations của Node.js mà không cần truyền biến thủ công qua từng tầng layer.
+    - Cung cấp: `runWithTraceContext`, `getTraceContext`, `getTraceId`, `getCorrelationId`, `setTraceTag`, `getTraceDurationMs`.
+  - **2. Correlation & Tracing Middleware (`src/middlewares/correlation.middleware.ts` & `src/middlewares/request-id.middleware.ts`)**:
+    - Tiếp nhận và chuẩn hóa các headers: `X-Correlation-Id`, `X-Trace-Id`, `X-Request-Id` (UUIDv7 time-ordered, RFC 9562).
+    - Regex validation chống triệt để CRLF injection (`\r\n`), HTTP Response Splitting và Log Injection.
+    - Luôn thiết lập cả 3 response headers: `X-Request-Id`, `X-Correlation-Id`, `X-Trace-Id`.
+    - Phân tách logic: Ưu tiên Correlation/Trace ID từ client/upstream phân tán; đồng thời bảo vệ nghiêm ngặt `X-Request-Id` từ API Gateway Traefik qua `x-gateway-secret` (Timing-safe comparison).
+    - Tự động wrap toàn bộ request lifecycle trong `runWithTraceContext`.
+  - **3. Structured Error Handling (RFC 7807 / RFC 9457 Problem Details) (`src/middlewares/error.middleware.ts`)**:
+    - Chuẩn hóa payload lỗi trả về thống nhất cho toàn bộ hệ thống: `{ success: false, code, message, traceId, correlationId, timestamp, path, errors?, details? }`.
+    - Tự động trích xuất `traceId` từ `getTraceId()` hoặc request headers để nhúng vào mọi phản hồi lỗi (ZodError 422, AppError, SyntaxError 400, MulterError, Prisma P2002/P2025, Unhandled Error 500).
+    - Tuyệt đối không để lộ thông tin nhạy cảm của CSDL trong lỗi 500, nhưng ghi log đầy đủ kèm `[Trace-ID: ...]`.
+    - Tạo các Typed Error Subclasses trong `src/common/errors/structured-errors.ts`: `BadRequestError`, `UnauthorizedError`, `ForbiddenError`, `NotFoundError`, `ConflictError`, `ValidationError`, `TooManyRequestsError`, `TimeoutError`, `BadGatewayError`, `ServiceUnavailableError`.
+    - Bổ sung mã lỗi vào `src/common/errors/error-code.ts`: `REQUEST_TIMEOUT`, `SERVICE_UNAVAILABLE`, `BAD_GATEWAY`, `CIRCUIT_BREAKER_OPEN`.
+  - **4. Timeout Controls & Async Deadlines (`src/middlewares/timeout.middleware.ts`)**:
+    - `createTimeoutMiddleware` & `timeoutMiddleware`: Giới hạn thời gian phản hồi HTTP (mặc định 15s), tự động ngắt và trả về HTTP 504 `REQUEST_TIMEOUT` nếu backend bị nghẽn, dọn dẹp timer an toàn khi response finish/close.
+    - Tiện ích `withTimeout(promise, timeoutMs, operationName)`: Bảo vệ các async tasks và consumer handlers không bị treo vô hạn.
+  - **5. E2E Tracing Propagation Xuyên Suốt Microservices Backbone**:
+    - `EventBusService.publish`: Tự động trích xuất `traceId` từ `getTraceId()` nếu không truyền tường minh; lưu `_traceId` vào Transactional Outbox; Outbox Relay khôi phục nguyên vẹn `traceId` khi tái xuất bản.
+    - `EventBusService.dispatchDirectly`: Wrap execution của toàn bộ subscriber handlers trong `runWithTraceContext`.
+    - `PpeViolationSubscriber`: Cả 4 Consumer Groups (Incident, Notification, Reporting, Audit) thừa kế cùng 1 `traceId`.
+    - Sự kiện thứ cấp `ppe.incident.created` kế thừa nguyên vẹn `traceId` của sự kiện gốc `ppe.violation.detected`.
+    - Audit Consumer lưu `traceId` vào `details.traceId` trong bảng `audit_logs`.
+    - `ReliabilityService.executeWithRetry`: Tự động log kèm `[Trace: ${traceId}]` cho từng attempt retry.
+    - `ReliabilityService.getTraceTimeline(traceId)` & Route `GET /api/v1/reliability/traces/:traceId`: Tổng hợp toàn bộ hành trình E2E từ Ingestion, EventBus, DLQ, Idempotency và Audit Logs gắn với `traceId`.
+  - **6. Test Coverage & Verification**:
+    - Bộ test chuyên dụng `tests/correlation-error-handling.test.ts`: **18/18 test cases PASS 100%**.
+    - Bộ test Gateway `tests/api-gateway-phase4.test.ts` & `tests/observability.test.ts`: **47/47 test cases PASS 100%**.
+    - Bộ test Broker `tests/message-broker-service.test.ts`: **24/24 test cases PASS 100%**.
+    - Bộ test Reliability `tests/reliability-retry-idempotency.test.ts`: **18/18 test cases PASS 100%**.
+    - Bộ test Incident `tests/incident-service.test.ts`: **30/30 test cases PASS 100%**.
+    - `pnpm build`: TypeScript strict mode biên dịch sạch 0 lỗi.
+    - `pnpm run lint`: ESLint 0 errors / 0 warnings.
+
+- **Open-Code-Review Hardening & Clean Architecture Alignment (2026-10-12)**:
+  - **Error Middleware Defensive Guards**: `src/middlewares/error.middleware.ts` kiểm tra an toàn `!res.headersSent`, `typeof res.setHeader === "function"` và `typeof res.getHeader === "function"` trước khi thiết lập trace headers; kiểm tra nullability của `req` và `req.headers` trong `resolveTraceId`. Triệt tiêu hoàn toàn lỗi runtime `TypeError: res.getHeader is not a function` và bảo đảm tính tương thích tuyệt đối cho các mock response trong unit tests.
+  - **Timeout Middleware Response Wrap Guard**: `src/middlewares/timeout.middleware.ts` tự động bọc `res.json` và `res.send` để ngăn chặn `[ERR_HTTP_HEADERS_SENT]` khi controller/service chậm hoàn thành sau khi deadline timeout 504 đã gửi về client; phân tích an toàn `REQUEST_TIMEOUT_MS` chống giá trị `NaN`.
+  - **Audit Domain Boundary Encapsulation**: `src/modules/audit/audit.repository.ts` cung cấp hàm chuẩn hóa `findByTraceId(traceId, limit)`. `ReliabilityRepository` ủy quyền hoàn toàn qua `AuditRepository` thay vì import động Prisma Client và query chéo bảng `audit_logs`.
+  - **Centralized Constants & Zero Magic Strings**: Khai báo tập trung `TRACE_STAGE` (`DEAD_LETTER_QUEUE`, `IDEMPOTENCY_MUTEX`, `AUDIT_LOG`) và `TRACE_STAGE_STATUS` trong `src/common/constants/reliability.constant.ts`.
+  - **Sensitive Data Filtering in Timeline**: `ReliabilityService.getTraceTimeline` chủ động lọc bỏ các trường nhạy cảm (`password`, `token`, `secret`, `authorization`, `refreshToken`, `accessToken`, `apiKey`) trong `a.details` trước khi phản hồi về client.
+  - **Strict Type Safety in Structured Errors**: Thay thế toàn bộ kiểu `any` bằng `unknown` trong constructor của các subclass `AppError` tại `src/common/errors/structured-errors.ts`.

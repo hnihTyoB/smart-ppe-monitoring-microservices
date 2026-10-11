@@ -13,6 +13,7 @@ import {
 } from "./modules/incident/incident.route";
 import { rateLimitMiddleware } from "./middlewares/rate-limit.middleware";
 import { requestIdMiddleware } from "./middlewares/request-id.middleware";
+import { timeoutMiddleware } from "./middlewares/timeout.middleware";
 import { maintenanceGuard } from "./middlewares/maintenance.middleware";
 import { envConfig } from "./config/env.config";
 
@@ -32,6 +33,7 @@ incidentApp.set("trust proxy", envConfig.trustProxy);
 
 // 1. Distributed Tracing & Security Headers
 incidentApp.use(requestIdMiddleware);
+incidentApp.use(timeoutMiddleware);
 incidentApp.use(
   helmet({
     contentSecurityPolicy: {

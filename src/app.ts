@@ -14,6 +14,7 @@ import { jwksRoute } from "./modules/jwks/jwks.route";
 import { swaggerSpec, swaggerOptions } from "./config/swagger.config";
 import { rateLimitMiddleware } from "./middlewares/rate-limit.middleware";
 import { requestIdMiddleware } from "./middlewares/request-id.middleware";
+import { timeoutMiddleware } from "./middlewares/timeout.middleware";
 import { envConfig } from "./config/env.config";
 
 const app = express();
@@ -21,6 +22,7 @@ const app = express();
 app.set("trust proxy", envConfig.trustProxy);
 
 app.use(requestIdMiddleware);
+app.use(timeoutMiddleware);
 app.use(
   helmet({
     contentSecurityPolicy: {

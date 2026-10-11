@@ -535,6 +535,41 @@ export class AuditRepository {
     }
     return createdAtFilter;
   }
+
+  /**
+   * 8. Tra cứu các bản ghi AuditLog liên kết với traceId (Distributed Tracing)
+   */
+  async findByTraceId(traceId: string, limit: number = 50): Promise<AuditLogItemDto[]> {
+    try {
+      const logs = await this.db.auditLog.findMany({
+        where: {
+          details: {
+            path: ["traceId"],
+            equals: traceId,
+          },
+        },
+        orderBy: { createdAt: "asc" },
+        take: limit,
+      });
+
+      return logs.map((log) => ({
+        id: log.id,
+        actorId: log.actorId,
+        actor: null,
+        action: log.action,
+        targetType: log.targetType,
+        targetId: log.targetId,
+        details: log.details as Record<string, unknown> | null,
+        ipAddress: log.ipAddress,
+        userAgent: log.userAgent,
+        createdAt: log.createdAt.toISOString(),
+      }));
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[AuditRepository] Lỗi tra cứu audit logs theo traceId ${traceId}:`, message);
+      return [];
+    }
+  }
 }
 
 export const auditRepository = new AuditRepository();

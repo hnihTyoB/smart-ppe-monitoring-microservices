@@ -6,7 +6,11 @@ import { envConfig } from "../config/env.config";
 import { AppError } from "../common/errors/app-error";
 import { ERROR_CODE } from "../common/errors/error-code";
 
+import { runWithTraceContext } from "../common/context/trace-context";
+
 export const REQUEST_ID_HEADER = GATEWAY_HEADERS.REQUEST_ID;
+export const CORRELATION_ID_HEADER = "x-correlation-id";
+export const TRACE_ID_HEADER = "x-trace-id";
 
 /**
  * Regex kiểm tra correlation Request ID an toàn:
@@ -50,15 +54,13 @@ export function isTrustedGatewayRequest(
  * Middleware gắn correlation request ID (UUIDv7 — time-ordered) vào req và header response.
  *
  * Chiến lược lấy Request ID theo thứ tự ưu tiên:
- *   1. Nhận từ API Gateway qua header `x-request-id` (chỉ trust khi đến từ gateway hợp lệ
- *      hoặc khi GATEWAY_INTERNAL_SECRET chưa cấu hình — phù hợp dev/monolith mode,
- *      đồng thời phải thỏa mãn regex an toàn chống injection).
- *   2. Sinh mới bằng UUIDv7 (time-ordered, thân thiện B-tree index, chuẩn RFC 9562).
+ *   1. Nhận từ client/gateway qua x-correlation-id, x-trace-id hoặc x-request-id.
+ *   2. Kiểm tra tính tin cậy (gateway secret hoặc dev mode) và regex an toàn.
+ *   3. Sinh mới bằng UUIDv7 (time-ordered, chuẩn RFC 9562).
  *
- * Tại sao UUIDv7:
- *   - Sắp xếp được theo thời gian → không cần đánh index thêm.
- *   - Đảm bảo tính duy nhất trên toàn bộ cluster (không đụng độ).
- *   - Tương thích với distributed tracing tiêu chuẩn (OpenTelemetry / Jaeger / Zipkin).
+ * Đồng thời:
+ *   - Đồng bộ sang AsyncLocalStorage để duy trì TraceContext cho toàn bộ async operations.
+ *   - Thiết lập các response header X-Request-Id, X-Correlation-Id, X-Trace-Id.
  */
 export function requestIdMiddleware(
   req: Request,
@@ -66,18 +68,53 @@ export function requestIdMiddleware(
   next: NextFunction,
 ): void {
   const secret = envConfig.gateway.internalSecret;
-  const incomingId = req.headers[REQUEST_ID_HEADER];
-  const isValid = isValidRequestId(incomingId);
-  const isTrusted = isTrustedGatewayRequest(req, secret) || !secret;
+  const incomingCorrelationId =
+    req.headers[CORRELATION_ID_HEADER] || req.headers[TRACE_ID_HEADER];
+  const incomingRequestId = req.headers[REQUEST_ID_HEADER];
 
-  // Nhận từ gateway nếu secret khớp và ID hợp lệ, hoặc sinh mới UUIDv7
-  const requestId = isValid && isTrusted ? incomingId : uuidv7();
+  let requestId: string;
+
+  if (
+    typeof incomingCorrelationId === "string" &&
+    isValidRequestId(incomingCorrelationId)
+  ) {
+    // 1. Nhận Correlation ID / Trace ID từ client/upstream phân tán
+    requestId = incomingCorrelationId;
+  } else if (
+    typeof incomingRequestId === "string" &&
+    isValidRequestId(incomingRequestId) &&
+    (isTrustedGatewayRequest(req, secret) || !secret)
+  ) {
+    // 2. Nhận Request ID từ API Gateway tin cậy
+    requestId = incomingRequestId;
+  } else {
+    // 3. Tự động sinh mới UUIDv7 (time-ordered, chuẩn RFC 9562)
+    requestId = uuidv7();
+  }
 
   req.headers[REQUEST_ID_HEADER] = requestId;
+  req.headers[CORRELATION_ID_HEADER] = requestId;
+  req.headers[TRACE_ID_HEADER] = requestId;
+
   req.id = requestId;
+  req.traceId = requestId;
+  req.correlationId = requestId;
+
+  res.setHeader("X-Correlation-Id", requestId);
+  res.setHeader("X-Trace-Id", requestId);
   res.setHeader("X-Request-Id", requestId);
 
-  next();
+  runWithTraceContext(
+    {
+      traceId: requestId,
+      correlationId: requestId,
+      requestId,
+      startTime: Date.now(),
+    },
+    () => {
+      next();
+    },
+  );
 }
 
 /**
@@ -89,17 +126,50 @@ export function createRequestIdMiddleware(secret: string) {
     res: Response,
     next: NextFunction,
   ): void {
-    const incomingId = req.headers[REQUEST_ID_HEADER];
-    const isValid = isValidRequestId(incomingId);
-    const isTrusted = isTrustedGatewayRequest(req, secret) || !secret;
+    const incomingCorrelationId =
+      req.headers[CORRELATION_ID_HEADER] || req.headers[TRACE_ID_HEADER];
+    const incomingRequestId = req.headers[REQUEST_ID_HEADER];
 
-    const requestId = isValid && isTrusted ? incomingId : uuidv7();
+    let requestId: string;
+
+    if (
+      typeof incomingCorrelationId === "string" &&
+      isValidRequestId(incomingCorrelationId)
+    ) {
+      requestId = incomingCorrelationId;
+    } else if (
+      typeof incomingRequestId === "string" &&
+      isValidRequestId(incomingRequestId) &&
+      (isTrustedGatewayRequest(req, secret) || !secret)
+    ) {
+      requestId = incomingRequestId;
+    } else {
+      requestId = uuidv7();
+    }
 
     req.headers[REQUEST_ID_HEADER] = requestId;
+    req.headers[CORRELATION_ID_HEADER] = requestId;
+    req.headers[TRACE_ID_HEADER] = requestId;
+
     req.id = requestId;
+    req.traceId = requestId;
+    req.correlationId = requestId;
+
+    res.setHeader("X-Correlation-Id", requestId);
+    res.setHeader("X-Trace-Id", requestId);
     res.setHeader("X-Request-Id", requestId);
 
-    next();
+    runWithTraceContext(
+      {
+        traceId: requestId,
+        correlationId: requestId,
+        requestId,
+        startTime: Date.now(),
+      },
+      () => {
+        next();
+      },
+    );
   };
 }
 

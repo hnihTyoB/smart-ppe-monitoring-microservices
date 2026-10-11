@@ -18,6 +18,10 @@ import {
   outboxRepository,
   OutboxRepository,
 } from "../repositories/outbox.repository";
+import {
+  getTraceId,
+  runWithTraceContext,
+} from "../context/trace-context";
 
 export interface PublishEventOptions {
   aggregateId?: string | null;
@@ -162,13 +166,15 @@ export class EventBusService {
     payload: EventPayloadMap[K],
     options?: PublishEventOptions,
   ): Promise<EventEnvelope<EventPayloadMap[K]>> {
+    const traceId = options?.traceId || getTraceId() || uuidv7();
+
     const envelope: EventEnvelope<EventPayloadMap[K]> = {
       id: uuidv7(),
       name: eventName,
       payload,
       aggregateId: options?.aggregateId ?? null,
       timestamp: Date.now(),
-      traceId: options?.traceId,
+      traceId,
       source: "template-be-core",
     };
 
@@ -177,7 +183,10 @@ export class EventBusService {
     // 1. Transactional Outbox: Ghi vào CSDL trước
     if (useOutbox) {
       try {
-        const payloadToSave = this.encryptSensitivePayloadFields(payload);
+        let payloadToSave: any = this.encryptSensitivePayloadFields(payload);
+        if (payloadToSave && typeof payloadToSave === "object") {
+          payloadToSave = { ...payloadToSave, _traceId: traceId };
+        }
 
         const outboxRecord = await this.outboxRepo.create(
           {
@@ -307,12 +316,22 @@ export class EventBusService {
       return;
     }
 
-    // 2. Thực thi toàn bộ consumers song song
-    const handlerPromises = Array.from(handlers).map(async (handler) => {
-      await handler(envelope);
-    });
-
-    await Promise.all(handlerPromises);
+    // 2. Thực thi toàn bộ consumers song song bên trong Trace Context
+    const traceId = envelope.traceId || envelope.id;
+    await runWithTraceContext(
+      {
+        traceId,
+        correlationId: traceId,
+        source: envelope.source,
+        startTime: Date.now(),
+      },
+      async () => {
+        const handlerPromises = Array.from(handlers).map(async (handler) => {
+          await handler(envelope);
+        });
+        await Promise.all(handlerPromises);
+      },
+    );
 
     // 3. Đánh dấu đã xử lý thành công
     this.markEventProcessed(envelope.id);
@@ -415,6 +434,10 @@ export class EventBusService {
             payload: decryptedPayload,
             aggregateId: record.aggregateId,
             timestamp: record.createdAt.getTime(),
+            traceId:
+              (decryptedPayload as any)?._traceId ||
+              (decryptedPayload as any)?.traceId ||
+              record.id,
             source: "template-be-outbox-relay",
           };
 

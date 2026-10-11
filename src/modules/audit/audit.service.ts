@@ -169,6 +169,14 @@ export class AuditService {
     // BOM for UTF-8 Excel support
     return "\uFEFF" + csvLines.join("\r\n");
   }
+
+  // ── 7. Lấy danh sách Audit Logs theo Trace ID ──────────────────────────────
+  async getAuditLogsByTraceId(
+    traceId: string,
+    limit?: number,
+  ): Promise<AuditLogItemDto[]> {
+    return this.repository.findByTraceId(traceId, limit);
+  }
 }
 
 export const auditService = new AuditService();

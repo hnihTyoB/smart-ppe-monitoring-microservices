@@ -629,7 +629,57 @@
 
 ---
 
-## 🛠️ 13. CHECKLIST CHUẨN BỊ TRƯỚC GIỜ BẢO VỆ
+## 🔍 13. CHUYÊN ĐỀ SÂU: 5 CÂU HỎI VẤN ĐÁP TỪ MODULE TRUY VẾT PHÂN TÁN & CHUẨN HÓA LỖI RFC 7807 (TASK BE-14)
+
+### 🔹 Câu 63 (Task BE-14: `correlation.middleware.ts`): AsyncLocalStorage & Cơ Chế Truyền Vết Correlation ID (Zero Parameter Drilling)
+* **Câu hỏi**: *"Trong kiến trúc Microservices phân tán với hàng trăm tiến trình bất đồng bộ chạy xen kẽ, làm thế nào em theo dõi được một yêu cầu từ lúc người dùng gửi vào cho đến tận các dịch vụ nền? Tại sao em sử dụng Node.js AsyncLocalStorage thay vì truyền thủ công tham số correlationId qua từng tầng kiến trúc?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô, em sử dụng cơ chế `AsyncLocalStorage` của Node.js kết hợp `CorrelationMiddleware`:  
+  > 1) **Bắt giữ và Chuẩn hóa Ngay tại Biên**: Khi HTTP request đến, middleware kiểm tra các header chuẩn (`X-Correlation-ID`, `X-Request-ID`, `traceparent` W3C); nếu client không gửi, hệ thống tự động sinh UUIDv7 có tính sắp xếp đơn điệu theo thời gian và đính kèm vào response header.  
+  > 2) **Truyền vết xuyên suốt mà không cần truyền biến thủ công (Zero Parameter Drilling)**: Thay vì phải truyền tham số `correlationId` qua hàng chục hàm (`Controller -> Service -> Repository -> Logger`), `AsyncLocalStorage` lưu trữ `TraceContext` trong phạm vi thực thi bất đồng bộ của riêng request đó. Mọi logger, transaction và event emitter đều có thể gọi `TraceContext.get()` để lấy mã vết trong $O(1)$.  
+  > 3) **Lan truyền xuyên ranh giới Microservices**: Khi EventBus bắn gói tin sang Kafka, `correlationId` được tự động đóng gói vào Kafka Record Header, giúp 4 Consumer downstream tiếp tục kế thừa chính xác cùng một mã Trace ID."*
+
+---
+
+### 🔹 Câu 64 (Task BE-14: `error.middleware.ts`): Chuẩn Hóa Lỗi RFC 7807/9457 Problem Details & Phòng Thủ Rò Rỉ Thông Tin (CWE-209)
+* **Câu hỏi**: *"Tại sao em lại áp dụng chuẩn IETF RFC 7807 / RFC 9457 (Problem Details) cho toàn bộ phản hồi lỗi của hệ thống? Khi xảy ra lỗi sập nội bộ nghiêm trọng (HTTP 500 Internal Server Error), cơ chế phòng thủ của em ngăn chặn rò rỉ thông tin nhạy cảm (CWE-209 Information Disclosure) ra sao mà vẫn cho phép kỹ sư tra cứu được lỗi?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô, em áp dụng chuẩn RFC 7807/9457 và phòng thủ chống rò rỉ dữ liệu (CWE-209):  
+  > 1) **Chuẩn hóa Máy đọc được (Machine-Readable RFC 7807/9457)**: Phản hồi lỗi đồng nhất toàn hệ thống với `type`, `title`, `status`, `detail`, `instance`, `code`, `errors` và `traceId`. Giúp Frontend và AI Edge bóc tách lỗi theo trường cấu trúc thay vì phân tích chuỗi văn bản tự do.  
+  > 2) **Phòng thủ Rò rỉ Thông tin Nhạy cảm (CWE-209)**: Với lỗi 500 Internal Server Error chưa lường trước, việc để lộ Stack Trace hoặc câu lệnh SQL sẽ làm lộ cấu trúc CSDL và thông tin hạ tầng cho hacker. `ErrorMiddleware` tự động giấu kín thông tin nhạy cảm trên môi trường Production, chỉ trả về thông điệp an toàn kèm `traceId`. Quản trị viên chỉ cần lấy `traceId` này tra cứu trên hệ thống Log nội bộ là phục dựng được 100% ngữ cảnh lỗi mà kẻ tấn công không thể khai thác được gì."*
+
+---
+
+### 🔹 Câu 65 (Task BE-14: `timeout.middleware.ts`): Kiểm Soát Timeout & Async Deadline và Bảo Vệ An Toàn Với `res.headersSent`
+* **Câu hỏi**: *"Nếu một lệnh gọi ra dịch vụ ngoài (như SMTP Mail, MinIO S3, Camera RTSP) bị treo không phản hồi, em kiểm soát hạn mức thời gian (Async Deadline & Timeout) như thế nào để chống cạn kiệt tài nguyên (Socket Starvation)? Tại sao việc kiểm tra cờ 'res.headersSent' lại mang tính sống còn để ngăn sập máy chủ Node.js sau khi Timeout đã kích hoạt?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô, em thiết lập kiểm soát hạn mức thời gian và bảo vệ an toàn luồng bất đồng bộ:  
+  > 1) **Kiểm soát Timeout & Async Deadline**: Middleware áp dụng hạn mức xử lý (mặc định 15.000ms có fallback an toàn) và hàm `withTimeout`. Khi một dịch vụ ngoài bị treo, hệ thống tự động ngắt request và trả về HTTP 504 Gateway Timeout theo chuẩn RFC 7807, thu hồi socket và slot connection pool để chống cạn kiệt tài nguyên (Socket Starvation).  
+  > 2) **Bảo vệ An toàn với `res.headersSent`**: Khi tác vụ chạy ngầm hoàn tất muộn sau khi 504 đã gửi đi, nếu controller gọi tiếp `res.json()` sẽ kích hoạt lỗi nghiêm trọng `ERR_HTTP_HEADERS_SENT` làm crash tiến trình Node.js. Middleware của em chủ động kiểm tra `res.headersSent` để chặn việc ghi đè response, đồng thời `errorMiddleware` ủy quyền an toàn về `next(err)` nếu header đã gửi, đảm bảo server không bao giờ bị sập."*
+
+---
+
+### 🔹 Câu 66 (Task BE-14: `reliability.service.ts`): Phục Dựng Dòng Thời Gian Xử Lý Phân Tán (E2E Trace Timeline) & Làm Sạch Dữ Liệu Nhạy Cảm
+* **Câu hỏi**: *"Khi cán bộ an toàn phản ánh họ không nhận được cảnh báo về một sự cố nguy hiểm, làm thế nào hệ thống của em phục dựng được toàn bộ lộ trình xử lý phân tán của sự kiện đó (Pipeline Traceability Timeline) chỉ từ một mã correlationId? Em đã giải quyết bài toán Bảo mật Dữ liệu (Data Sanitization) khi xuất nhật ký chặng như thế nào?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô, em thiết kế cơ chế Phục dựng Dòng thời gian Xử lý (Pipeline Traceability Timeline) kèm Làm sạch dữ liệu an toàn:  
+  > 1) **Phục dựng Toàn cảnh Phân tán (`GET /reliability/traces/:correlationId`)**: Chỉ với 1 mã correlationId, API đối soát chéo để xâu chuỗi toàn bộ hành trình sự kiện qua các chặng chuẩn: `INGESTION -> EVENT_BUS_PUBLISH -> CONSUMER_INCIDENT -> CONSUMER_NOTIFICATION -> OUTBOX -> AUDIT`. Mỗi chặng hiển thị rõ trạng thái (`SUCCESS`/`FAILED`/`PENDING`), độ trễ `latencyMs` và lý do lỗi cụ thể, giúp định vị chính xác điểm nghẽn chỉ trong vài giây.  
+  > 2) **Làm sạch Dữ liệu Nhạy cảm (`[SEC-01]` Sanitization)**: Trước khi xuất dữ liệu ra ngoài, Service tự động quét đệ quy và che giấu/loại bỏ triệt để các trường nhạy cảm như `password`, `token`, `secret`, `authorization`, `apiKey` trong cấu trúc `details`, đảm bảo việc tra cứu lỗi không bao giờ trở thành lỗ hổng rò rỉ bí mật hệ thống."*
+
+---
+
+### 🔹 Câu 67 (Task BE-14: Live Demo Tracing): Kịch bản Live Demo 2 phút trên Swagger UI & Trình duyệt
+* **Câu hỏi**: *"Em hãy trình bày kịch bản Live Demo 2 phút trên Swagger UI để chứng minh trước Hội đồng: Cơ chế tự sinh Correlation ID trên Response Header, Chuẩn hóa phản hồi lỗi RFC 7807/9457 có đính kèm traceId, và Phục dựng Dòng thời gian phân tán toàn cảnh (E2E Trace Timeline) của một sự kiện vi phạm?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Hội đồng, em xin demo kịch bản 4 bước thực chiến trong 2 phút trên Swagger UI (`/api/docs`):  
+  > 1. **Kiểm chứng Header Correlation ID**: Trên Swagger, gọi `GET /api/v1/reliability/health` không truyền header. Mở Response Headers chỉ ra `x-correlation-id` và `x-trace-id` tự động sinh dạng UUIDv7 đơn điệu theo thời gian.  
+  > 2. **Kiểm chứng Lỗi Chuẩn RFC 7807**: Gọi `GET /api/v1/incidents/fake-id` với ID không tồn tại. Màn hình trả về cấu trúc Problem Details chuẩn quốc tế: `type`, `status: 404`, `detail`, `instance` và trường `traceId` khớp 100% với header, chứng minh khả năng tra cứu lỗi tức thì.  
+  > 3. **Bơm sự kiện có Trace Header**: Gọi `POST /api/v1/broker/ingest/violation` đính kèm `x-correlation-id: ppe-live-demo-8888` tạo vi phạm `NO_HELMET`. Broker và 4 consumer phân tán xử lý song song.  
+  > 4. **Phục dựng Dòng thời gian E2E Trace Timeline**: Gọi `GET /api/v1/reliability/traces/ppe-live-demo-8888`. Màn hình trả về trọn vẹn lộ trình 5 chặng liên hoàn: `INGESTION -> EVENT_BUS_PUBLISH -> CONSUMER_INCIDENT -> CONSUMER_NOTIFICATION -> AUDIT_RECORD` với trạng thái `SUCCESS` và dữ liệu nhạy cảm đã được làm sạch, khẳng định năng lực giám sát phân tán chuẩn doanh nghiệp."*
+
+---
+
+## 🛠️ 14. CHECKLIST CHUẨN BỊ TRƯỚC GIỜ BẢO VỆ
 
 - [ ] **Môi trường máy tính**:
   - Đã nạp sẵn Docker images (`postgres:16-alpine`, `confluentinc/cp-kafka:7.5.0`, `provectuslabs/kafka-ui`, `minio/minio`).
@@ -647,6 +697,7 @@
 - [ ] **Terminal chuẩn bị sẵn**:
   - Cửa sổ 1: Đang chạy `docker compose -f docker-compose.infra.yml ps`.
   - Cửa sổ 2: Thư mục dự án sẵn sàng gõ `pnpm test`.
+
 
 
 

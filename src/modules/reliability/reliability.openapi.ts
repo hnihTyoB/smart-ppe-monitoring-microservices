@@ -112,4 +112,46 @@ export function registerReliabilityOpenApi(): void {
       403: { description: "Không đủ quyền quản trị (cần PPE_RELIABILITY_MANAGE)" },
     },
   });
+
+  // 4. GET /reliability/traces/{traceId}
+  openapiRegistry.registerPath({
+    method: "get",
+    path: "/reliability/traces/{traceId}",
+    tags: ["Reliability & Fault Tolerance"],
+    summary: "Tra cứu hành trình E2E Timeline của một Trace ID (Task BE-14)",
+    description: "Tổng hợp các chặng xử lý từ Ingestion, EventBus, DLQ, Idempotency và Audit Logs gắn với traceId.",
+    security: [{ BearerAuth: [] }],
+    request: {
+      params: z.object({
+        traceId: z.string().describe("UUID Trace ID cần tra cứu E2E timeline"),
+      }),
+    },
+    responses: {
+      200: {
+        description: "Hành trình E2E Timeline của Trace ID được trả về thành công",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                traceId: z.string(),
+                timestamp: z.number(),
+                eventsCount: z.number(),
+                stages: z.array(
+                  z.object({
+                    stage: z.string(),
+                    status: z.string(),
+                    timestamp: z.number(),
+                    details: z.record(z.unknown()).optional(),
+                  }),
+                ),
+              }),
+            }),
+          },
+        },
+      },
+      401: { description: "Yêu cầu Bearer Token xác thực" },
+      403: { description: "Không đủ quyền truy cập (cần PPE_RELIABILITY_READ)" },
+    },
+  });
 }

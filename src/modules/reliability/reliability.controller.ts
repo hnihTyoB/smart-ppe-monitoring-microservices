@@ -76,6 +76,27 @@ export class ReliabilityController {
       next(err);
     }
   };
+
+  /**
+   * Tra cứu hành trình E2E Timeline của một Trace ID
+   * GET /api/v1/reliability/traces/:traceId
+   */
+  getTraceTimeline = async (
+    req: Request<{ traceId: string }>,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
+    try {
+      const { traceId } = req.params;
+      const data = await this.service.getTraceTimeline(traceId);
+      res.status(200).json({
+        success: true,
+        data,
+      });
+    } catch (err) {
+      next(err);
+    }
+  };
 }
 
 export const reliabilityController = new ReliabilityController();

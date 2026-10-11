@@ -403,6 +403,7 @@ export class PpeViolationSubscriber {
         targetType: AUDIT_TARGET_TYPE.PPE_VIOLATION,
         targetId: payload.violationId,
         details: {
+          traceId: envelope.traceId,
           site: payload.site,
           camera: payload.camera,
           summary: payload.summary,

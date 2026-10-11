@@ -48,6 +48,8 @@ import {
   RETRY_POLICY,
 } from "../../common/constants/reliability.constant";
 
+import { getTraceId } from "../../common/context/trace-context";
+
 export class BrokerService {
   private readonly bus: EventBusService;
   private readonly audit: AuditService;
@@ -72,6 +74,7 @@ export class BrokerService {
     incomingTraceId?: string,
     actorId?: string,
   ): Promise<PublishViolationResponseDto> {
+    const effectiveIncomingTraceId = incomingTraceId || getTraceId();
     let eventId: string;
     let traceId: string;
     let payload: PPEViolationDetectedPayload;
@@ -97,6 +100,7 @@ export class BrokerService {
             payload: input,
             aggregateId: (input as any).payload?.site?.id || null,
             timestamp: Date.now(),
+            traceId: (input as any).traceId || effectiveIncomingTraceId,
             source: "broker-ingestion-bridge",
           },
           `Zod Schema Validation Failed: ${errorDetail}`,
@@ -111,7 +115,7 @@ export class BrokerService {
       }
 
       eventId = validation.data.eventId;
-      traceId = validation.data.traceId || incomingTraceId || uuidv7();
+      traceId = validation.data.traceId || effectiveIncomingTraceId || uuidv7();
       payload = {
         ...validation.data.payload,
         detections: validation.data.payload.detections ?? [],
@@ -135,6 +139,7 @@ export class BrokerService {
             payload: input,
             aggregateId: (input as any).site?.id || null,
             timestamp: Date.now(),
+            traceId: effectiveIncomingTraceId,
             source: "broker-ingestion-bridge",
           },
           `Zod Schema Validation Failed: ${errorDetail}`,
@@ -149,7 +154,7 @@ export class BrokerService {
       }
 
       eventId = uuidv7();
-      traceId = incomingTraceId || uuidv7();
+      traceId = effectiveIncomingTraceId || uuidv7();
       payload = {
         ...validation.data,
         detections: validation.data.detections ?? [],
@@ -241,6 +246,7 @@ export class BrokerService {
         targetType: AUDIT_TARGET_TYPE.PPE_BROKER,
         targetId: eventId,
         details: {
+          traceId,
           violationId: payload.violationId,
           siteId: payload.site.id,
           siteCode: payload.site.code,

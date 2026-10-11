@@ -9,6 +9,7 @@ import { PERMISSIONS } from "../../common/constants/permission.constant";
 import {
   idempotencyKeyQuerySchema,
   purgeIdempotencyKeysSchema,
+  traceParamSchema,
 } from "./reliability.validation";
 
 export const reliabilityRouter = Router();
@@ -46,6 +47,18 @@ reliabilityRouter.delete(
   requirePermission(PERMISSIONS.PPE_RELIABILITY_MANAGE),
   validate(purgeIdempotencyKeysSchema, "body"),
   reliabilityController.purgeKeys,
+);
+
+/**
+ * 4. Tra cứu hành trình E2E Timeline của một Trace ID (Acceptance Criteria BE-14)
+ * GET /api/v1/reliability/traces/:traceId
+ */
+reliabilityRouter.get(
+  "/traces/:traceId",
+  authMiddleware,
+  requirePermission(PERMISSIONS.PPE_RELIABILITY_READ),
+  validate(traceParamSchema, "params"),
+  reliabilityController.getTraceTimeline,
 );
 
 export default reliabilityRouter;
