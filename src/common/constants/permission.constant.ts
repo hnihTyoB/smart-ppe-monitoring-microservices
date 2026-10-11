@@ -80,6 +80,10 @@ export const PERMISSIONS = {
 
   PPE_MODEL_READ: "PPE_MODEL_READ",
   PPE_MODEL_MANAGE: "PPE_MODEL_MANAGE",
+
+  // Message Broker & Event Ingestion
+  PPE_BROKER_PUBLISH: "PPE_BROKER_PUBLISH",
+  PPE_BROKER_MANAGE: "PPE_BROKER_MANAGE",
 } as const;
 
 export type PermissionKey = keyof typeof PERMISSIONS;

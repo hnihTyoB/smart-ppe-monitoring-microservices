@@ -55,12 +55,12 @@ export const ppeViolationDetectedPayloadSchema = z.object({
     .datetime()
     .describe("Thời điểm phát hiện vi phạm theo chuẩn ISO 8601"),
   site: z.object({
-    id: z.string().describe("ID công trường"),
+    id: z.string().uuid().describe("UUID định danh công trường"),
     code: z.string().min(1).describe("Mã công trường (VD: SITE-HANOI-01)"),
     name: z.string().min(1).describe("Tên công trường"),
   }),
   camera: z.object({
-    id: z.string().describe("ID camera"),
+    id: z.string().uuid().describe("UUID định danh camera"),
     code: z.string().min(1).describe("Mã camera (VD: CAM-GATE-01)"),
     name: z.string().min(1).describe("Tên vị trí camera"),
     zone: z.string().min(1).describe("Khu vực giám sát (VD: Cổng vào khu vực thi công A)"),

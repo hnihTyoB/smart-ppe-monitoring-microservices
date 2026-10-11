@@ -528,7 +528,56 @@
 
 ---
 
-## 🛠️ 11. CHECKLIST CHUẨN BỊ TRƯỚC GIỜ BẢO VỆ
+## 📨 11. CHUYÊN ĐỀ SÂU: 5 CÂU HỎI VẤN ĐÁP TỪ MODULE MESSAGE BROKER & EVENT INGESTION BRIDGE (TASK BE-12)
+
+### 🔹 Câu 53 (Task BE-12: `ppe-violation.subscriber.ts`): 4 Consumer Groups Độc Lập & Cô lập Lỗi (Fault Isolation)
+* **Câu hỏi**: *"Tại sao cùng một sự kiện AI phát hiện vi phạm bảo hộ (`ppe.violation.detected`), em lại phân rã thành 4 Consumer Groups độc lập (Incident, Notification, Reporting, Audit) thay vì gom vào 1 Consumer chạy tuần tự? Nguyên lý Cô lập lỗi (Fault Isolation) phát huy tác dụng như thế nào khi máy chủ gửi mail SMTP bị nghẽn?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô, việc tách thành 4 Consumer Groups độc lập (`incident`, `notification`, `reporting`, `audit`) cùng lắng nghe topic `ppe.violation.detected` giải quyết 2 bài toán sống còn:  
+  > 1) **Độc lập Tốc độ Xử lý (Consumer Lag Decoupling)**: Lưu Incident và ghi Audit chỉ mất 5-10ms, trong khi Notification (gửi Email/SSE) có thể mất vài giây và Reporting cần tính toán tổng hợp. Nếu dùng 1 Consumer tuần tự, một sự cố nghẽn mạng SMTP sẽ làm kẹt toàn bộ hàng đợi, khiến sự cố nguy cấp không được lưu vào CSDL.  
+  > 2) **Cô lập Lỗi Tuyệt đối (Fault Isolation)**: Mỗi Consumer Group duy trì con trỏ Offset riêng. Khi `NotificationConsumer` gặp sự cố sập mạng hoặc timeout, lỗi được cô lập tại group đó mà KHÔNG làm ảnh hưởng, rollback hay cản trở `IncidentConsumer` lưu hồ sơ pháp lý vào CSDL `ppe_incident_db`."*
+
+---
+
+### 🔹 Câu 54 (Task BE-12: `event-bus.service.ts`): Xử Lý Idempotent Consumer & Cửa Sổ Chống Trùng 24 Giờ (24h Deduplication Window)
+* **Câu hỏi**: *"Trong giao thức phân tán của Kafka, ngữ nghĩa phân phối tin nhắn là At-least-once (có thể gửi lại nhiều lần khi rớt mạng hoặc Rebalance). Làm thế nào em đảm bảo tính Bất biến trùng lặp (Idempotent Consumer) để ngăn chặn việc tạo trùng Incident, spam email và làm sai lệch số liệu thống kê AI? Em đã thiết kế Cửa sổ chống trùng 24 giờ (24h Deduplication Window) ra sao?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô, em áp dụng mô hình Phòng thủ 2 lớp (Two-Tier Idempotency) với Cửa sổ chống trùng 24 giờ:  
+  > 1) **Tầng Broker Ingestion**: `EventBus` lưu vết `eventId` / `violationId` trên bộ nhớ/Redis với TTL 24 giờ (`DEDUPLICATION_TTL = 86400s`). Gói tin trùng lặp gửi lại sẽ bị chặn và bỏ qua ngay tại cửa ngõ mà không tiêu tốn tài nguyên xử lý.  
+  > 2) **Tầng Consumer Chuyên biệt (Defense-in-Depth)**: Mỗi Consumer Group kiểm tra trạng thái độc lập trước khi thực thi: `IncidentConsumer` kiểm tra CSDL xem sự cố đã tồn tại chưa; `Notification`, `Reporting`, `Audit` consumers lưu cờ trạng thái riêng `processed:{group}:{violationId}`. Dù Kafka có rebalance gửi lại thông điệp thì hệ thống cũng không bao giờ phát sinh sự cố nhân đôi, không spam email và không làm sai lệch số liệu KPI Telemetry của mô hình AI."*
+
+---
+
+### 🔹 Câu 55 (Task BE-12: `event-bus.service.ts`): Kiến Trúc Dead Letter Queue (DLQ) & Cơ Chế Tái Xử Lý (Reprocessing Engine)
+* **Câu hỏi**: *"Khi camera AI gửi lên gói tin sai cấu trúc hoặc dịch vụ gặp sự cố tạm thời, hiện tượng 'Poison Pill' (viên thuốc độc) có thể làm tê liệt toàn bộ hàng đợi nếu worker rơi vào vòng lặp retry vô hạn. Em đã thiết kế kiến trúc Dead Letter Queue (DLQ) và Cơ chế tái xử lý (Reprocessing Engine) như thế nào để cách ly lỗi và bảo toàn dữ liệu?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô, em thiết kế kiến trúc Dead Letter Queue (DLQ) chuẩn doanh nghiệp với 2 cơ chế bảo vệ:  
+  > 1) **Cách ly 'Viên thuốc độc' (Poison Pill Isolation)**: Khi gói tin vi phạm không qua được Zod Schema hoặc gặp lỗi không thể phục hồi sau giới hạn retry, `EventBus` lập tức chuyển thông điệp vào hàng đợi thư chết DLQ (`ppe.violation.dlq` / `DEAD_LETTER`) kèm lý do lỗi cụ thể. Nhờ đó, luồng xử lý chính không bao giờ bị kẹt vòng lặp vô hạn (Crash Loop), các sự cố hợp lệ khác vẫn được tiêu thụ mượt mà.  
+  > 2) **Quản trị chẩn đoán & Tái xử lý (Zero Data Loss Reprocessing)**: Cung cấp bộ API quản trị (`GET /broker/dlq` xem chi tiết lỗi, `POST /broker/dlq/:id/reprocess` tái xuất bản thông điệp về topic gốc khi sự cố mạng đã khắc phục, và `DELETE /broker/dlq` dọn dẹp). Điều này đảm bảo không bao giờ thất thoát dữ liệu an toàn lao động và dễ dàng khắc phục sự cố vận hành."*
+
+---
+
+### 🔹 Câu 56 (Task BE-12: `broker.service.ts`): Ingestion Bridge & Chuẩn Hóa StorageKey (Query Stripping) & Thẩm Định Zod Schema
+* **Câu hỏi**: *"Tại sao trong Ingestion Bridge (`POST /broker/ingest/violation`), em lại cần cơ chế Chuẩn hóa đường dẫn bằng chứng (Snapshot URL Normalization / Query Stripping) khi trích xuất `storageKey`? Việc thẩm định Zod Schema khắt khe tại cửa ngõ bảo vệ toàn bộ kiến trúc Downstream ra sao?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô, em thiết kế chuẩn hóa và thẩm định chặt chẽ tại tầng Ingestion Bridge:  
+  > 1) **Chuẩn hóa StorageKey (Query Stripping)**: Khi camera AI tải ảnh lên MinIO/S3, URL bằng chứng thường chứa các tham số Presigned Signature tạm thời (`?X-Amz-Signature=...&X-Amz-Expires=...`). Nếu lưu nguyên xi làm `storageKey`, CSDL sẽ bị phình rác, lộ chữ ký hết hạn và gây lỗi khi hệ thống cần sinh lại link tải mới. Việc bóc tách sạch query string giúp `storageKey` luôn là đường dẫn định danh đối tượng nguyên bản và bất biến (`sites/{siteId}/cameras/{camId}/...jpg`).  
+  > 2) **Kiểm soát Schema tại biên (Zod Contract)**: Áp dụng nguyên lý 'Garbage In, Garbage Out', hệ thống thẩm định khắt khe UUID hợp lệ, bắt buộc có ít nhất 1 loại vi phạm PPE và timestamp chuẩn ISO. Bất kỳ dữ liệu sai lệch nào đều bị chặn ngay tại cửa ngõ hoặc chuyển vào DLQ, triệt tiêu nguy cơ làm sập 4 consumer groups downstream."*
+
+---
+
+### 🔹 Câu 57 (Task BE-12: Live Demo Broker): Kịch bản Live Demo 2 phút trên Swagger UI & Trình duyệt
+* **Câu hỏi**: *"Em hãy trình bày kịch bản Live Demo 2 phút trên Swagger UI để chứng minh: Kiểm tra trạng thái Broker & 4 Consumer Groups, Ingest sự kiện vi phạm phân tán, Cách ly lỗi tự động vào Dead Letter Queue (DLQ), và Tái xuất bản thông điệp thành công mà không làm mất dữ liệu?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Hội đồng, em xin demo kịch bản 4 bước thực chiến trong 2 phút trên Swagger UI (`/api/docs`):  
+  > 1. **Khảo sát Sức khỏe Broker**: Gọi `GET /api/v1/broker/health` trên Swagger, chỉ rõ trạng thái `CONNECTED`, topic `ppe.violation.detected` cùng 4 Consumer Groups (`incident`, `notification`, `reporting`, `audit`) đang sẵn sàng tiêu thụ.  
+  > 2. **Ingest sự kiện vi phạm hợp lệ**: Gọi `POST /api/v1/broker/ingest/violation` với gói tin chuẩn `NO_HELMET`. Swagger trả về HTTP 202 Accepted kèm `eventId`; đồng thời 4 consumer song song kích hoạt: tạo Incident, đẩy SSE realtime, ghi AI Telemetry và lưu Audit Log.  
+  > 3. **Thử nghiệm Poison Pill & Định tuyến DLQ**: Gửi 1 gói tin cố tình hỏng cấu trúc (`violationId` không phải UUID). Hệ thống từ chối và tự động chuyển vào hàng đợi thư chết DLQ, giữ cho tiến trình worker không bị crash.  
+  > 4. **Thanh tra DLQ & Tái xử lý**: Gọi `GET /api/v1/broker/dlq` xem chi tiết lý do lỗi Zod Validation. Sau đó gọi `POST /api/v1/broker/dlq/:id/reprocess` để tái xử lý thành công chuyển trạng thái `REPROCESSED`, chứng minh năng lực tự phục hồi và bảo toàn dữ liệu 100%."*
+
+---
+
+## 🛠️ 12. CHECKLIST CHUẨN BỊ TRƯỚC GIỜ BẢO VỆ
 
 - [ ] **Môi trường máy tính**:
   - Đã nạp sẵn Docker images (`postgres:16-alpine`, `confluentinc/cp-kafka:7.5.0`, `provectuslabs/kafka-ui`, `minio/minio`).
@@ -546,6 +595,7 @@
 - [ ] **Terminal chuẩn bị sẵn**:
   - Cửa sổ 1: Đang chạy `docker compose -f docker-compose.infra.yml ps`.
   - Cửa sổ 2: Thư mục dự án sẵn sàng gõ `pnpm test`.
+
 
 
 

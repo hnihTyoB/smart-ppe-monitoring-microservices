@@ -973,3 +973,5 @@ export class ReportingRepository {
     });
   }
 }
+
+export const reportingRepository = new ReportingRepository();

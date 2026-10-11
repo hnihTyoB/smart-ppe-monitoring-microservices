@@ -32,6 +32,7 @@ import {
   reportRouter,
   aiModelRouter,
 } from "../modules/reporting/reporting.route";
+import brokerRouter from "../modules/broker/broker.route";
 
 const router = Router();
 
@@ -75,6 +76,9 @@ router.use("/evidences", evidenceRouter);
 router.use("/statistics", statisticRouter);
 router.use("/reports", reportRouter);
 router.use("/ai-models", aiModelRouter);
+
+// PPE Message Broker & AI Ingestion Bridge Endpoints (Task BE-12)
+router.use("/broker", brokerRouter);
 
 export default router;
 

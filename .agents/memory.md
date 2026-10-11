@@ -1171,3 +1171,35 @@
     - `pnpm build`: TypeScript strict mode biên dịch sạch 0 lỗi.
     - `pnpm run lint`: ESLint 0 errors / 0 warnings.
     - `pnpm exec prisma validate --schema prisma/identity/schema.prisma`: Schema hợp lệ 100%.
+- **PPE Microservices: Task BE-12 - Message Broker Service (2026-10-12)**:
+  - **Mục tiêu**: Hoàn thiện toàn diện Task `BE-12` (Module `Broker`, Owner `SV3`, Priority `P0`) theo phân công đồ án PPE Microservices, chuẩn kiến trúc kỹ thuật `D08.pdf` (Mục 2.7 & Câu 15 defense guide), thỏa mãn acceptance criteria: *"Message publish/consume thành công"*, thiết lập kênh liên lạc hướng sự kiện Event-Driven giữa AI Vision (`Python - SV2`) và Backend Microservices (`NodeJS/TS - SV3`).
+  - **1. REST Ingestion Bridge Endpoint (`POST /api/v1/broker/publish`)**:
+    - Cung cấp HTTP bridge endpoint cho container AI Vision (Python - SV2 via contract `VI-11`) đẩy sự kiện vi phạm mà không bắt buộc phụ thuộc trực tiếp vào Kafka local client.
+    - Hỗ trợ đa dạng phương thức xác thực: API Key (`X-API-Key` qua `apiKeyAuthMiddleware`) hoặc JWT Bearer Token (`authMiddleware`), phân quyền chặt chẽ với `PPE_BROKER_PUBLISH`.
+    - Chấp nhận cả 2 định dạng: Full Kafka Envelope (`ppeViolationDetectedKafkaEventSchema`) hoặc Raw Payload vi phạm (`ppeViolationDetectedPayloadSchema`). Tự động gắn Correlation Headers (`X-Trace-Id`, `X-Event-Id`) vào response (HTTP 202 Accepted).
+  - **2. Idempotent Consumer & De-duplication 24 Giờ**:
+    - Cơ chế de-duplication kép dựa trên `eventId` (UUIDv7) và `payload.violationId` với bộ nhớ đệm TTL 24h.
+    - Khi nhận sự kiện trùng lặp, Broker phản hồi ngay trạng thái `DUPLICATE_SKIPPED` (HTTP 200), ngăn chặn việc tạo trùng lặp Incident trong CSDL hoặc spam cảnh báo.
+  - **3. Mô hình Fan-out 4 Consumer Groups Độc lập (`PpeViolationSubscriber`)**:
+    - Triển khai 4 Consumer Groups theo đúng đặc tả tài liệu kiến trúc `D08.pdf` (Mục 2.7 & Câu 15):
+      1. `INCIDENT_SERVICE` (`ppe-incident-consumer-group`): Kiểm tra vi phạm trong CSDL $\rightarrow$ Tự động tạo Incident (status: `PENDING_REVIEW`) kèm bằng chứng snapshot MinIO và aiDetections $\rightarrow$ Phát sự kiện nội bộ `ppe.incident.created`.
+      2. `NOTIFICATION_SERVICE` (`ppe-notification-consumer-group`): Kích hoạt `NotificationService.dispatchIncidentNotification` phát SSE realtime alert tới Web Dashboard của Safety Officers và xếp hàng gửi email cảnh báo nếu severity $\ge$ HIGH.
+      3. `REPORTING_SERVICE` (`ppe-reporting-consumer-group`): Tiếp nhận vi phạm và telemetry hiệu năng AI (FPS, latency) ghi nhận vào `reportingRepository.recordAiPerformanceMetric`.
+      4. `AUDIT_LOGGER` (`ppe-audit-consumer-group`): Ghi nhận Audit Log `PPE_VIOLATION_DETECTED` với targetId là `violationId` và actor `ai-inference-engine`.
+    - **Bảo đảm Fault Isolation**: Mỗi Consumer bọc trong block `try-catch` độc lập; sự cố lỗi mạng/mail của NotificationConsumer hoàn toàn không làm gián đoạn hay crash luồng tạo Incident trong Incident DB.
+  - **4. Dead-Letter Queue (DLQ) & Poison Pill Management**:
+    - Tự động cô lập các sự kiện sai schema Zod hoặc gặp lỗi xử lý vào DLQ (`ppe.dead-letter-queue`).
+    - Cung cấp các API quản trị tra cứu phân trang `GET /api/v1/broker/dlq`, tái xử lý `POST /api/v1/broker/dlq/:id/reprocess`, và dọn dẹp `DELETE /api/v1/broker/dlq`.
+    - Cung cấp healthcheck probe `GET /api/v1/broker/health` cho Kubernetes & container monitoring.
+  - **5. Code Review Remediation & Automated Verification (2026-10-12)**:
+    - **Principle of Least Privilege**: Gỡ bỏ quyền `PPE_INCIDENT_READ` và `API_KEY_MANAGE` khỏi `requireAnyPermission` trên `POST /api/v1/broker/publish`; chỉ cho phép các quyền ghi nghiệp vụ `PPE_BROKER_PUBLISH`, `PPE_BROKER_MANAGE`, `PPE_INCIDENT_MANAGE`.
+    - **Dual Ingestion Auth**: `brokerIngestionAuth` nhận diện cả hai định dạng API Key: header `x-api-key` và `Authorization: Bearer ak_...`.
+    - **Strict Boundary Validation**: Bổ sung `.uuid()` cho `site.id` và `camera.id` trong `ppeViolationDetectedPayloadSchema`, triệt tiêu hoàn toàn lỗi crash runtime PostgreSQL do sai cú pháp UUID khi tạo Incident.
+    - **DLQ State Management**: Bổ sung `status` (`DLQ_RECORD_STATUS.PENDING` / `REPROCESSED`) và `reprocessedAt` vào `DlqRecordItemDto` và `EventBusService`; tự động cập nhật `markDlqReprocessed` khi tái xử lý thành công.
+    - **Consumer Idempotency**: Bổ sung kiểm tra trùng lặp `isEventAlreadyProcessed` và đánh dấu `markEventProcessed` độc lập cho cả 3 consumers phụ (`NotificationConsumer`, `ReportingConsumer`, `AuditConsumer`), ngăn ngừa spam email/SSE và đúp số liệu metric khi message bị retry.
+    - **URL Sanitization**: Tách query string (`.split("?")[0]`) trước khi lấy `storageKey` từ snapshot URL, chống dính pre-signed parameters vào metadata file.
+    - **Clean Layering & Type Safety**: Loại bỏ `(this.bus as any)` bằng các getters `isConnected` và `processedCacheSize` trên `EventBusService`; loại bỏ `(req as any)` trong `BrokerController` bằng Express generics.
+    - **Defensive Guard**: Bổ sung kiểm tra chuỗi rỗng trong `IncidentRepository.findIncidentByViolationId`.
+    - **Test Coverage**: Bộ test chuyên dụng `tests/message-broker-service.test.ts`: **24/24 test cases PASS 100%**.
+    - `pnpm build`: TypeScript strict mode biên dịch sạch 0 lỗi.
+    - `pnpm run lint`: ESLint 0 errors / 0 warnings.

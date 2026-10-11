@@ -31,6 +31,8 @@ export interface DlqRecord {
   error: string;
   failedAt: number;
   attempts: number;
+  status?: string;
+  reprocessedAt?: number;
 }
 
 const isTestEnv =
@@ -361,6 +363,7 @@ export class EventBusService {
       error,
       failedAt: Date.now(),
       attempts,
+      status: "PENDING",
     };
 
     this.dlqEvents.push(record);
@@ -534,8 +537,35 @@ export class EventBusService {
   /**
    * Các phương thức phục vụ kiểm thử và quan sát
    */
+  public get isConnected(): boolean {
+    return this.isRedisAvailable;
+  }
+
+  public get processedCacheSize(): number {
+    return this.processedEventIds.size;
+  }
+
   public getDlqEvents(): DlqRecord[] {
     return [...this.dlqEvents];
+  }
+
+  public markDlqReprocessed(eventId: string): boolean {
+    const record = this.dlqEvents.find((r) => r.envelope.id === eventId);
+    if (record) {
+      record.status = "REPROCESSED";
+      record.reprocessedAt = Date.now();
+      return true;
+    }
+    return false;
+  }
+
+  public removeDlqRecord(eventId: string): boolean {
+    const index = this.dlqEvents.findIndex((r) => r.envelope.id === eventId);
+    if (index !== -1) {
+      this.dlqEvents.splice(index, 1);
+      return true;
+    }
+    return false;
   }
 
   public clearDlq(): void {

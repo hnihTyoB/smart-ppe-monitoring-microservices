@@ -162,6 +162,33 @@ export class IncidentRepository {
     return incident ? serializeIncident(incident) : null;
   }
 
+  async findIncidentByViolationId(violationId: string) {
+    if (!violationId || typeof violationId !== "string" || violationId.trim() === "") {
+      return null;
+    }
+
+    const incident = await this.db.incident.findFirst({
+      where: { violationId },
+      include: {
+        evidences: {
+          include: { metadata: true },
+          orderBy: { capturedAt: "desc" },
+        },
+        statusHistory: {
+          orderBy: { changedAt: "desc" },
+        },
+        assignments: {
+          orderBy: { assignedAt: "desc" },
+        },
+        comments: {
+          orderBy: { createdAt: "asc" },
+        },
+      },
+    });
+
+    return incident ? serializeIncident(incident) : null;
+  }
+
   async findAllIncidents(
     query: IncidentQueryDto,
   ): Promise<PaginatedResultDto<IncidentItemDto>> {

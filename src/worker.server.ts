@@ -23,6 +23,7 @@ import { registerAllSubscribers } from "./common/subscribers";
 import { notificationSubscriber } from "./common/subscribers/notification.subscriber";
 import { authCleanupSubscriber } from "./common/subscribers/auth-cleanup.subscriber";
 import { storageCleanupSubscriber } from "./common/subscribers/storage-cleanup.subscriber";
+import { ppeViolationSubscriber } from "./common/subscribers/ppe-violation.subscriber";
 import { eventBus } from "./common/services/event-bus.service";
 import { prisma } from "./database/prisma.client";
 
@@ -50,6 +51,7 @@ export async function startWorkerProcess(): Promise<void> {
     storageCleanupSubscriber.register();
   }
   authCleanupSubscriber.register();
+  ppeViolationSubscriber.register();
 
   // Ensure default system configs are ready
   await systemConfigService.ensureDefaultConfigs().catch((err) => {

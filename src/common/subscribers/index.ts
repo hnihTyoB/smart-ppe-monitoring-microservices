@@ -1,6 +1,7 @@
 import { notificationSubscriber } from "./notification.subscriber";
 import { authCleanupSubscriber } from "./auth-cleanup.subscriber";
 import { storageCleanupSubscriber } from "./storage-cleanup.subscriber";
+import { ppeViolationSubscriber } from "./ppe-violation.subscriber";
 
 let isRegistered = false;
 
@@ -12,6 +13,7 @@ export function registerAllSubscribers(): void {
   notificationSubscriber.register();
   authCleanupSubscriber.register();
   storageCleanupSubscriber.register();
+  ppeViolationSubscriber.register();
   isRegistered = true;
   console.log(
     "[EventBus] 🚀 All microservices event subscribers registered successfully",
