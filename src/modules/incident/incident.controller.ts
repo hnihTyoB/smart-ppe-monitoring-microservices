@@ -159,8 +159,9 @@ export class IncidentController {
   assignIncident = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { id } = req.params;
+      const actorId = getActorId(req);
       const body = req.body as CreateIncidentAssignmentDto;
-      const result = await this.service.assignIncident(id, body);
+      const result = await this.service.assignIncident(id, body, actorId);
       res.status(201).json({
         success: true,
         data: result,

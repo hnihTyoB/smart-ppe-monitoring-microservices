@@ -37,20 +37,28 @@ import {
   EVIDENCE_ACCESS_ACTION,
   EvidenceAccessAction,
 } from "../../common/constants/incident.constant";
+import { auditService, AuditService } from "../audit/audit.service";
+import {
+  AUDIT_ACTION,
+  AUDIT_TARGET_TYPE,
+} from "../../common/constants/audit-log.constant";
 
 export class IncidentService {
   private readonly repository: IncidentRepository;
   private readonly storage: EvidenceStorageService;
   private readonly notification: NotificationService;
+  private readonly audit: AuditService;
 
   constructor(
     repository?: IncidentRepository,
     storage?: EvidenceStorageService,
     notification?: NotificationService,
+    audit?: AuditService,
   ) {
     this.repository = repository || incidentRepository;
     this.storage = storage || evidenceStorageService;
     this.notification = notification || notificationService;
+    this.audit = audit || auditService;
   }
 
   // ── Incident CRUD Operations ───────────────────────────────────────────────
@@ -141,13 +149,32 @@ export class IncidentService {
         ? dto.reason || "Xác nhận vi phạm quy chuẩn an toàn PPE"
         : dto.reason;
 
-    return this.repository.transitionStatus({
+    const updated = await this.repository.transitionStatus({
       incidentId: id,
       oldStatus: incident.status,
       newStatus,
       changedBy: actorId,
       reason,
     });
+
+    // Task BE-11: Ghi AuditLog kiểm toán review sự cố vi phạm (Non-blocking)
+    await this.audit.recordLog({
+      actorId,
+      action: AUDIT_ACTION.REVIEW_PPE_INCIDENT,
+      targetType: AUDIT_TARGET_TYPE.PPE_INCIDENT,
+      targetId: id,
+      details: {
+        decision: dto.decision,
+        reason,
+        oldStatus: incident.status,
+        newStatus,
+        violationType: incident.violationType,
+        siteId: incident.siteId,
+        cameraId: incident.cameraId,
+      },
+    });
+
+    return updated;
   }
 
   async resolveIncident(id: string, dto: ResolveIncidentDto, actorId: string) {
@@ -161,7 +188,7 @@ export class IncidentService {
       );
     }
 
-    return this.repository.transitionStatus({
+    const updated = await this.repository.transitionStatus({
       incidentId: id,
       oldStatus: incident.status,
       newStatus: INCIDENT_STATUS.RESOLVED,
@@ -169,6 +196,22 @@ export class IncidentService {
       reason: dto.resolutionNote,
       resolvedAt: new Date(),
     });
+
+    // Task BE-11: Ghi AuditLog giải quyết sự cố
+    await this.audit.recordLog({
+      actorId,
+      action: AUDIT_ACTION.RESOLVE_PPE_INCIDENT,
+      targetType: AUDIT_TARGET_TYPE.PPE_INCIDENT,
+      targetId: id,
+      details: {
+        resolutionNote: dto.resolutionNote,
+        oldStatus: incident.status,
+        newStatus: INCIDENT_STATUS.RESOLVED,
+        violationType: incident.violationType,
+      },
+    });
+
+    return updated;
   }
 
   async closeIncident(id: string, dto: CloseIncidentDto, actorId: string) {
@@ -185,17 +228,36 @@ export class IncidentService {
       );
     }
 
-    return this.repository.transitionStatus({
+    const updated = await this.repository.transitionStatus({
       incidentId: id,
       oldStatus: incident.status,
       newStatus: INCIDENT_STATUS.CLOSED,
       changedBy: actorId,
       reason: dto.closeNote || "Đóng hồ sơ sự cố an toàn",
     });
+
+    // Task BE-11: Ghi AuditLog đóng sự cố
+    await this.audit.recordLog({
+      actorId,
+      action: AUDIT_ACTION.CLOSE_PPE_INCIDENT,
+      targetType: AUDIT_TARGET_TYPE.PPE_INCIDENT,
+      targetId: id,
+      details: {
+        closeNote: dto.closeNote,
+        oldStatus: incident.status,
+        newStatus: INCIDENT_STATUS.CLOSED,
+      },
+    });
+
+    return updated;
   }
 
   // ── Assignment & Comment Operations ────────────────────────────────────────
-  async assignIncident(id: string, dto: CreateIncidentAssignmentDto) {
+  async assignIncident(
+    id: string,
+    dto: CreateIncidentAssignmentDto,
+    actorId?: string,
+  ) {
     const incident = await this.getIncidentById(id);
 
     if (
@@ -209,7 +271,20 @@ export class IncidentService {
       );
     }
 
-    return this.repository.assignIncident(id, dto.assignedTo);
+    const assignment = await this.repository.assignIncident(id, dto.assignedTo);
+
+    // Task BE-11: Ghi AuditLog phân công xử lý sự cố
+    await this.audit.recordLog({
+      actorId,
+      action: AUDIT_ACTION.ASSIGN_PPE_INCIDENT,
+      targetType: AUDIT_TARGET_TYPE.PPE_INCIDENT,
+      targetId: id,
+      details: {
+        assignedTo: dto.assignedTo,
+      },
+    });
+
+    return assignment;
   }
 
   async getIncidentAssignments(id: string) {

@@ -11,6 +11,7 @@ import healthRoute from "../modules/health/health.route";
 import fileRoute from "../modules/files/file.route";
 import securityTxtRoute from "../modules/security-txt/security-txt.route";
 import { jwksRoute } from "../modules/jwks/jwks.route";
+import auditRoute from "../modules/audit/audit.route";
 import { maintenanceGuard } from "../middlewares/maintenance.middleware";
 import {
   siteRouter,
@@ -54,6 +55,7 @@ router.use("/notifications", notificationRoute);
 router.use("/integration", integrationRoute);
 router.use("/cron", cronRoute);
 router.use("/files", fileRoute);
+router.use("/audit-logs", auditRoute);
 
 // PPE Site Management Microservice Endpoints
 router.use("/sites", siteRouter);

@@ -14,16 +14,23 @@ import {
   RestrictedAreaQueryDto,
 } from "./site.dto";
 import { DEFAULT_SAFETY_CONFIG } from "../../common/constants/site.constant";
+import { auditService, AuditService } from "../audit/audit.service";
+import {
+  AUDIT_ACTION,
+  AUDIT_TARGET_TYPE,
+} from "../../common/constants/audit-log.constant";
 
 export class SiteService {
   private readonly repository: SiteRepository;
+  private readonly audit: AuditService;
 
-  constructor(repository?: SiteRepository) {
+  constructor(repository?: SiteRepository, audit?: AuditService) {
     this.repository = repository || siteRepository;
+    this.audit = audit || auditService;
   }
 
   // ── Site Operations ────────────────────────────────────────────────────────
-  async createSite(data: CreateSiteDto) {
+  async createSite(data: CreateSiteDto, actorId?: string) {
     const existing = await this.repository.findSiteByCode(data.code);
     if (existing) {
       throw new AppError(
@@ -33,7 +40,21 @@ export class SiteService {
       );
     }
 
-    return this.repository.createSite(data);
+    const created = await this.repository.createSite(data);
+
+    // Ghi AuditLog tạo mới công trường
+    await this.audit.recordLog({
+      actorId,
+      action: AUDIT_ACTION.CREATE_PPE_SITE,
+      targetType: AUDIT_TARGET_TYPE.PPE_SITE,
+      targetId: created.id,
+      details: {
+        code: created.code,
+        name: created.name,
+      },
+    });
+
+    return created;
   }
 
   async findSiteById(id: string) {
@@ -52,7 +73,7 @@ export class SiteService {
     return this.repository.findAllSites(query);
   }
 
-  async updateSite(id: string, data: UpdateSiteDto) {
+  async updateSite(id: string, data: UpdateSiteDto, actorId?: string) {
     await this.findSiteById(id);
 
     if (data.code) {
@@ -66,10 +87,21 @@ export class SiteService {
       }
     }
 
-    return this.repository.updateSite(id, data);
+    const updated = await this.repository.updateSite(id, data);
+
+    // Ghi AuditLog cập nhật công trường
+    await this.audit.recordLog({
+      actorId,
+      action: AUDIT_ACTION.UPDATE_PPE_SITE,
+      targetType: AUDIT_TARGET_TYPE.PPE_SITE,
+      targetId: id,
+      details: data as Record<string, unknown>,
+    });
+
+    return updated;
   }
 
-  async deleteSite(id: string, force = false) {
+  async deleteSite(id: string, force = false, actorId?: string) {
     const site = await this.findSiteById(id);
 
     const hasChildren =
@@ -86,7 +118,21 @@ export class SiteService {
       );
     }
 
-    return this.repository.deleteSite(id);
+    const deleted = await this.repository.deleteSite(id);
+
+    // Ghi AuditLog xóa công trường
+    await this.audit.recordLog({
+      actorId,
+      action: AUDIT_ACTION.DELETE_PPE_SITE,
+      targetType: AUDIT_TARGET_TYPE.PPE_SITE,
+      targetId: id,
+      details: {
+        code: site.code,
+        name: site.name,
+      },
+    });
+
+    return deleted;
   }
 
   async archiveSite(id: string) {

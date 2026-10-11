@@ -17,11 +17,13 @@ import { registerCameraOpenApi } from "../modules/camera/camera.openapi";
 import { registerIncidentOpenApi } from "../modules/incident/incident.openapi";
 import { registerReportingOpenApi } from "../modules/reporting/reporting.openapi";
 import { registerSafetyRuleOpenApi } from "../modules/safety-rule/safety-rule.openapi";
+import { registerAuditOpenApi } from "../modules/audit/audit.openapi";
 
 // Tự động khởi tạo và đăng ký 100% routes & schemas từ Zod validation schemas
 registerAuthOpenApi();
 registerUserOpenApi();
 registerRbacOpenApi();
+registerAuditOpenApi();
 registerSiteOpenApi();
 registerCameraOpenApi();
 registerIncidentOpenApi();

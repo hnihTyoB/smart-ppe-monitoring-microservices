@@ -477,7 +477,58 @@
 
 ---
 
-## 🛠️ 10. CHECKLIST CHUẨN BỊ TRƯỚC GIỜ BẢO VỆ
+## 📋 10. CHUYÊN ĐỀ SÂU: 5 CÂU HỎI VẤN ĐÁP TỪ MODULE AUDIT LOG & COMPLIANCE SERVICE (TASK BE-11)
+
+### 🔹 Câu 48 (Task BE-11: `audit.service.ts`): Phòng thủ CSV Formula Injection (CWE-1236) & Tuân thủ RFC 4180
+* **Câu hỏi**: *"Khi cung cấp tính năng xuất nhật ký kiểm toán ra tệp CSV (`GET /api/v1/audit-logs/export?format=csv`) phục vụ cơ quan thanh tra an toàn lao động, hệ thống đối mặt với lỗ hổng Formula Injection (CSV Injection - CWE-1236) như thế nào nếu cán bộ nhập nội dung độc hại vào ghi chú sự cố? Em đã áp dụng giải pháp phòng thủ mật mã/ký tự và chuẩn RFC 4180 ra sao?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô:  
+  > 1) **Cơ chế tấn công Formula Injection (CWE-1236)**: Khi xuất dữ liệu Audit Log ra tệp CSV cho cơ quan thanh tra, nếu các trường văn bản (như `closeNote`, `resolutionNote`, `cameraName`) chứa các ký tự mở đầu đặc biệt như `=`, `+`, `-`, `@`, `\t`, `\r`, Microsoft Excel sẽ tự động hiểu đó là công thức tính toán và kích hoạt Dynamic Data Exchange (DDE) để thực thi mã độc hoặc rò rỉ dữ liệu trên máy tính của thanh tra viên.  
+  > 2) **Cơ chế trung hòa độc tố (Formula Sanitization)**: Em kiểm tra ký tự đầu tiên của từng ô dữ liệu; nếu thuộc nhóm kích hoạt công thức, hệ thống tự động chèn thêm dấu nháy đơn (`'`) ở đầu để Excel ép kiểu về chuỗi thuần túy (Plaintext).  
+  > 3) **Tuân thủ chuẩn RFC 4180**: Toàn bộ chuỗi chứa dấu phẩy, dấu xuống dòng đều được bọc trong dấu ngoặc kép (`"..."`), và mọi dấu ngoặc kép bên trong được escape thành hai dấu ngoặc kép (`""`), bảo đảm cấu trúc file CSV toàn vẹn tuyệt đối trên mọi ứng dụng bảng tính."*
+
+---
+
+### 🔹 Câu 49 (Task BE-11: `audit.service.ts`): Phân loại Danh mục Kiểm toán (Audit Taxonomy) & Dòng thời gian Tài nguyên (Resource Timeline)
+* **Câu hỏi**: *"Trong một hệ thống vận hành thực tế có hàng chục loại hành động phát sinh liên tục, em đã thiết kế Phân loại danh mục kiểm toán (Audit Taxonomy) như thế nào để phục vụ báo cáo tuân thủ? Và tính năng Truy vết dòng thời gian tài nguyên (Resource Audit Trail Timeline) giúp ích gì cho việc điều tra pháp lý khi xảy ra tai nạn lao động?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô:  
+  > 1) **Mô hình phân loại 2 tầng (2-Tier Audit Taxonomy)**: Tầng danh mục cấp cao (`AUDIT_CATEGORY`: `CONFIG`, `INCIDENT_REVIEW`, `AUTH`, `USER_MGMT`, `SYSTEM`) gom hàng chục action mã hóa thành các cụm nghiệp vụ trực quan, cho phép người quản trị/thanh tra viên lọc nhanh các biến động cấu hình an toàn hoặc quyết định duyệt sự cố mà không cần nhớ từng mã sự kiện riêng rẽ.  
+  > 2) **Dòng thời gian tài nguyên (`Resource Audit Trail Timeline` - `GET /resources/:type/:id/timeline`)**: Tái hiện trọn vẹn và chuẩn xác 100% vòng đời của một sự cố tai nạn từ lúc AI phát hiện $\rightarrow$ ai duyệt True/False alarm $\rightarrow$ ai phân công $\rightarrow$ ai xử lý $\rightarrow$ ai đóng hồ sơ kèm mốc thời gian ISO, IP mạng và Actor Profile đã được làm giàu thông tin (Enrichment). Điều này phục vụ hoàn hảo cho việc điều tra nguyên nhân tai nạn và trách nhiệm pháp lý trước tòa án."*
+
+---
+
+### 🔹 Câu 50 (Task BE-11: `incident.service.ts`): Tích hợp Kiểm toán Sâu vào Vòng đời Sự cố & Tính Chống chối bỏ (Non-repudiation)
+* **Câu hỏi**: *"Trong thực tế giám sát an toàn, nếu một cán bộ cố tình gắn cờ một sự cố nguy hiểm thành 'FALSE_ALARM' (Báo động giả) nhằm bao che cho nhà thầu thi công, làm thế nào hệ thống của em vạch rõ trách nhiệm cá nhân trước thanh tra hoặc cơ quan điều tra? Em đã tích hợp nguyên lý Chống chối bỏ (Non-repudiation) vào Incident Service ra sao?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô:  
+  > 1) **Ghi nhận kiểm toán bắt buộc (Deep Lifecycle Integration)**: Em tích hợp kiểm toán sâu vào toàn bộ vòng đời xử lý sự cố (`REVIEW`, `RESOLVE`, `CLOSE`, `ASSIGN`). Khi giám sát viên duyệt sự cố, hàm `reviewIncident` tự động phát sinh bản ghi kiểm toán mang action `REVIEW_PPE_INCIDENT` lưu cố định `actorId` (trích xuất từ JWT ký số), mốc thời gian ISO, địa chỉ IP mạng, quyết định (`FALSE_ALARM`) và ghi chú lý do (`reviewNote`).  
+  > 2) **Tính bất biến & Chống chối bỏ (Non-repudiation)**: Bảng Audit Log được thiết kế mang tính chất Bất biến (Append-Only), không cung cấp bất kỳ API nào cho phép sửa hay xóa bản ghi. Khi đoàn thanh tra hoặc cơ quan tư pháp điều tra, tính năng Resource Timeline lập tức đối chứng chính xác tài khoản và IP đã duyệt sai, triệt tiêu hoàn toàn khả năng chối bỏ trách nhiệm."*
+
+---
+
+### 🔹 Câu 51 (Task BE-11: `audit.repository.ts`): Tối ưu Truy vấn Hàng triệu Bản ghi & Khử N+1 Query khi Actor Profile Enrichment
+* **Câu hỏi**: *"Nhật ký kiểm toán là dữ liệu Append-Only tích tụ hàng triệu bản ghi rất nhanh theo thời gian. Khi cán bộ quản lý tìm kiếm từ khóa và lọc theo thời gian, làm thế nào hệ thống của em đảm bảo tốc độ phản hồi dưới 100ms mà không làm nghẽn CSDL? Em giải quyết bài toán làm giàu thông tin người thực hiện (Actor Profile Enrichment) để tránh N+1 Query như thế nào?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô, em tối ưu hóa truy vấn nhật ký quy mô lớn (High-volume Audit Querying) bằng 3 trụ cột kỹ thuật:  
+  > 1) **Đánh chỉ mục phức hợp (Composite Indexes) & Chặn biên phân trang**: CSDL được index theo `(created_at DESC, action)`, `(actor_id, created_at)` và `(target_type, target_id)`. Zod Schema khóa cứng `limit` tối đa 100 và ép buộc thứ tự ngày (`startDate <= endDate`) giúp khoanh vùng truy vấn cực nhanh.  
+  > 2) **Tối ưu hóa tìm kiếm văn bản (FTS Routing)**: Khi có tham số tìm kiếm, Service chuyển hướng sang `searchFts` tận dụng Full-Text Search thay vì quét tuần tự `LIKE '%keyword%'` làm tê liệt database.  
+  > 3) **Khử N+1 Query khi làm giàu thông tin (Actor Enrichment)**: Thay vì JOIN chéo database hoặc gọi N truy vấn user trong vòng lặp, Service gom danh sách `actorId` duy nhất và dùng 1 câu query `WHERE id IN (...)` duy nhất, sau đó map vào từng bản ghi log trên RAM trong $O(1)$. Phản hồi luôn đạt dưới 100ms."*
+
+---
+
+### 🔹 Câu 52 (Task BE-11: Live Demo Audit Service): Kịch bản Live Demo 2 phút trên Swagger UI & Trình duyệt
+* **Câu hỏi**: *"Em hãy trình bày kịch bản Live Demo 2 phút trên Swagger UI để chứng minh: Truy vết dòng thời gian sự cố (Timeline), Lọc danh mục nghiệp vụ (Category Taxonomy), Tổng hợp KPI kiểm toán (Audit Summary) và Xuất báo cáo thanh tra CSV an toàn chống Formula Injection trước Hội đồng?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Hội đồng, em xin demo kịch bản 4 bước thực chiến trong 2 phút trên Swagger UI (`/api/docs`):  
+  > 1. **Truy vết dòng thời gian Timeline**: Trên Swagger, gọi `GET /api/v1/audit-logs/resources/INCIDENT/{incidentId}/timeline`, hiển thị dòng thời gian liền mạch của một sự cố từ lúc phát hiện $\rightarrow$ duyệt $\rightarrow$ phân công $\rightarrow$ xử lý, kèm danh tính cán bộ đã được enrich đầy đủ.  
+  > 2. **Lọc Danh mục Nghiệp vụ**: Gọi `GET /api/v1/audit-logs?category=INCIDENT_REVIEW` chứng minh khả năng lọc tách biệt các hành động an toàn trọng yếu khỏi hàng ngàn log hệ thống thông thường.  
+  > 3. **Tổng hợp KPI Kiểm toán**: Gọi `GET /api/v1/audit-logs/summary` xem các chỉ số thống kê (tổng log theo danh mục, top 5 hành động, top cán bộ thao tác) phục vụ biểu đồ Dashboard.  
+  > 4. **Xuất báo cáo thanh tra CSV an toàn**: Gọi `GET /api/v1/audit-logs/export?format=csv`, mở file kết quả chứng minh dữ liệu chuẩn RFC 4180 và cơ chế tự động trung hòa Formula Injection (thêm dấu nháy đơn `'` trước các ký tự `=`, `+`, `-`), khẳng định tính toàn vẹn pháp lý trước hội đồng."*
+
+---
+
+## 🛠️ 11. CHECKLIST CHUẨN BỊ TRƯỚC GIỜ BẢO VỆ
 
 - [ ] **Môi trường máy tính**:
   - Đã nạp sẵn Docker images (`postgres:16-alpine`, `confluentinc/cp-kafka:7.5.0`, `provectuslabs/kafka-ui`, `minio/minio`).
@@ -495,5 +546,6 @@
 - [ ] **Terminal chuẩn bị sẵn**:
   - Cửa sổ 1: Đang chạy `docker compose -f docker-compose.infra.yml ps`.
   - Cửa sổ 2: Thư mục dự án sẵn sàng gõ `pnpm test`.
+
 
 

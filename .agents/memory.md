@@ -1137,3 +1137,37 @@
     - **Fix 3 (Security & Sensitive Data Leak)**: Bổ sung `requirePermission(PERMISSIONS.PPE_SAFETY_CONFIG_READ)` cho endpoint `GET /effective`; loại bỏ trường hạ tầng nhạy cảm `modelPath` (local path / S3 bucket URI) khỏi `ResolvedAiModelVersionDto` và HTTP response để phòng chống rò rỉ thông tin theo tiêu chuẩn CWE-200.
     - **Fix 4 (Cache Invalidation Gap)**: Nâng cấp định danh cache key theo cấu trúc thứ bậc `effective:site:${siteId}:camera:${cameraId}` và bổ sung hàm `getForCamera(cameraId)`. Khi Quản trị viên cập nhật cấu hình cấp Site, toàn bộ cache của các Camera trực thuộc cũng tự động được xóa bỏ tức thời; bổ sung guard chống wipeout cache bởi chuỗi rỗng.
     - **Fix 5 (Code Hygiene)**: Tái sử dụng `uuidSchema` từ `common.validation.ts` và gán type `AuditAction` chặt chẽ trong `SafetyRuleRepository.recordAuditLog`.
+- **PPE Microservices: Task BE-11 - Audit Log Service (2026-10-11)**:
+  - **Mục tiêu**: Hoàn thành toàn diện Task `BE-11` (Module Audit) theo phân công đồ án PPE Microservices, tài liệu kỹ thuật `D08.pdf`, thỏa mãn acceptance criteria: *"Có actor/action/time/resource"*, ghi nhận toàn diện lịch sử thay đổi cấu hình (`Site`, `Camera`, `Safety Rule`) và kiểm duyệt sự cố vi phạm (`Incident Review`).
+  - **1. Acceptance Criteria Cốt lõi & Dữ liệu Kiểm toán 4 Thành phần**:
+    - `actor`: `actorId` kèm thông tin định danh người thực hiện (`email`, `fullName`, `roleName`) qua cơ chế gom nhóm Batch Enrichment (Anti-N+1).
+    - `action`: Chuẩn hóa với `AUDIT_ACTION` (`REVIEW_PPE_INCIDENT`, `RESOLVE_PPE_INCIDENT`, `CLOSE_PPE_INCIDENT`, `ASSIGN_PPE_INCIDENT`, `UPDATE_PPE_SAFETY_CONFIG`, `UPDATE_PPE_SITE`, `REGISTER_PPE_CAMERA`,...).
+    - `time`: Dấu thời gian chuẩn ISO 8601 UTC+7 (`createdAt`).
+    - `resource`: Loại đối tượng (`targetType: PPE_INCIDENT | PPE_SAFETY_CONFIG | PPE_SITE | PPE_CAMERA`) và mã định danh (`targetId`).
+    - `details`: Snapshot chi tiết trạng thái trước/sau, quyết định duyệt (`CONFIRMED`/`DISMISSED`), lý do vi phạm hoặc diff cấu hình.
+  - **2. Tích hợp Audit Trail Đa dịch vụ**:
+    - `IncidentService`: Tự động ghi nhật ký khi cán bộ an toàn duyệt vi phạm (`reviewIncident`), xử lý giải quyết (`resolveIncident`), đóng hồ sơ (`closeIncident`), hoặc phân công cán bộ (`assignIncident`).
+    - `SiteService`: Ghi nhận khi tạo mới, cập nhật hoặc xóa công trường (`CREATE_PPE_SITE`, `UPDATE_PPE_SITE`, `DELETE_PPE_SITE`).
+    - `CameraService`: Ghi nhận khi đăng ký, cập nhật hoặc xóa camera (`REGISTER_PPE_CAMERA`, `UPDATE_PPE_CAMERA`, `DELETE_PPE_CAMERA`).
+    - `SafetyRuleService`: Đã tích hợp ghi nhận cấu hình an toàn AI (`UPDATE_PPE_SAFETY_CONFIG`, `UPDATE_PPE_CAMERA_SAFETY_CONFIG`).
+  - **3. Kiến trúc phân tầng 5 lớp chuẩn mực (`src/modules/audit/`)**:
+    - `audit.constant.ts`: Phân loại danh mục `AUDIT_CATEGORY` (`CONFIG`, `INCIDENT_REVIEW`, `ACCESS_CONTROL`, `SYSTEM`, `ALL`), định dạng xuất `AUDIT_EXPORT_FORMAT` (`csv`, `json`).
+    - `audit.dto.ts`: Định nghĩa toàn bộ interfaces DTO cho filters, actor snapshot, full log item, summary metrics, export parameters.
+    - `audit.validation.ts`: Zod schema validation ở biên HTTP (`UUID`, enum checks, date ranges `endDate >= startDate`).
+    - `audit.repository.ts`: Truy vấn `identityPrisma.auditLog`, tích hợp PostgreSQL Full-Text Search qua GIN index `idx_audit_logs_fts` (`ts_rank`), enrich actors 1 query, aggregation summary, và timeline theo tài nguyên.
+    - `audit.service.ts`: Xử lý nghiệp vụ phân loại category, summary KPI, xuất file CSV theo chuẩn RFC 4180 (escaping quotes/newlines, UTF-8 BOM), và helper `recordLog` non-blocking.
+    - `audit.controller.ts`: Tiếp nhận HTTP request/response cho 7 actions (`listLogs`, `getConfigChanges`, `getIncidentReviews`, `getResourceAuditTrail`, `getSummary`, `exportLogs`, `getLogDetail`).
+    - `audit.route.ts`: Mount `/api/v1/audit-logs`, bảo vệ bằng `authMiddleware`, `requirePermission(PERMISSIONS.AUDIT_LOG_READ)` và `requireAnyPermission(PERMISSIONS.AUDIT_LOG_EXPORT, PERMISSIONS.AUDIT_LOG_READ)`.
+    - `audit.openapi.ts`: Đăng ký tài liệu Swagger UI OpenAPI 3.0 với `openapiRegistry`.
+  - **4. Code Review Remediation & Automated Verification (2026-10-11)**:
+    - **TypeScript Build Hardening**: Đã xử lý triệt để 6 lỗi biên dịch TypeScript (`TS18048`, `TS2339`, `TS2322`, `TS2551`): đồng bộ nullable `email` & `fullName` trong `AuditLogActorDto`, kiểm tra an toàn `_count` trong Prisma `groupBy`, và chuẩn hóa chữ ký `assignIncident(id, dto, actorId)` giữa Controller và Service.
+    - **Credential Leak Prevention (CWE-200 / CWE-532)**: Tự động mask mật khẩu `streamUrl` bằng `maskStreamCredentials` trước khi lưu vào `details` của `AuditLog` trong `CameraService.updateCamera`.
+    - **HTTP Boundary Validation**: Bổ sung `auditSummaryQuerySchema` cho endpoint `GET /audit-logs/summary` và `resourceAuditTrailQuerySchema` cho `GET /audit-logs/resource/:targetType/:targetId`, đóng kín ranh giới Zod validation ở tầng route.
+    - **CSV Formula Injection Defense (CWE-1236)**: Thêm tiền tố nháy đơn `'` cho các trường bắt đầu bằng `=`, `+`, `-`, `@`, `\t`, `\r` trong `AuditService.formatLogsToCsv`.
+    - **Múi giờ đồng bộ**: Chuẩn hóa hàm helper `buildDateTimeFilter` tái sử dụng `getVietnamDayRange` (UTC+7 `Asia/Ho_Chi_Minh`) cho cả `searchFts`, `getSummary`, và `findForExport`.
+    - **Elimination of Magic Strings & Type Safety**: Thay thế string literals `"CONFIG"`, `"INCIDENT_REVIEW"` bằng `AUDIT_CATEGORY`, loại bỏ `as unknown as` trong `AuditController`.
+    - **Test Coverage**: `tests/audit-service.test.ts`: **25/25 test cases PASS 100%**.
+    - Toàn bộ 6 suites microservices PPE: **156/156 test cases PASS 100%**.
+    - `pnpm build`: TypeScript strict mode biên dịch sạch 0 lỗi.
+    - `pnpm run lint`: ESLint 0 errors / 0 warnings.
+    - `pnpm exec prisma validate --schema prisma/identity/schema.prisma`: Schema hợp lệ 100%.

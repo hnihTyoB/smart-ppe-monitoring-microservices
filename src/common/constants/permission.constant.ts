@@ -25,6 +25,7 @@ export const PERMISSIONS = {
 
   // Audit Logs
   AUDIT_LOG_READ: "AUDIT_LOG_READ",
+  AUDIT_LOG_EXPORT: "AUDIT_LOG_EXPORT",
 
   // System Maintenance
   MAINTENANCE_READ: "MAINTENANCE_READ",
