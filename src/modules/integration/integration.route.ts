@@ -16,6 +16,7 @@ import {
   listDeliveriesQuerySchema,
   triggerJobSchema,
 } from "./integration.validation";
+import { aiVisionRouter } from "./ai-vision.route";
 
 const router = Router();
 const controller = new IntegrationController();
@@ -127,4 +128,8 @@ router.post(
   controller.triggerDemoJob,
 );
 
+// ── AI Vision Edge Pipeline Integration Endpoints (Task BE-15) ────────────────
+router.use("/ai-vision", aiVisionRouter);
+
 export default router;
+

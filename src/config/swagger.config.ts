@@ -20,6 +20,7 @@ import { registerSafetyRuleOpenApi } from "../modules/safety-rule/safety-rule.op
 import { registerAuditOpenApi } from "../modules/audit/audit.openapi";
 import { registerBrokerOpenApi } from "../modules/broker/broker.openapi";
 import { registerReliabilityOpenApi } from "../modules/reliability/reliability.openapi";
+import { registerAiVisionOpenApi } from "../modules/integration/ai-vision.openapi";
 
 // Tự động khởi tạo và đăng ký 100% routes & schemas từ Zod validation schemas
 registerAuthOpenApi();
@@ -34,6 +35,7 @@ registerReportingOpenApi();
 registerSafetyRuleOpenApi();
 registerBrokerOpenApi();
 registerReliabilityOpenApi();
+registerAiVisionOpenApi();
 registerMaintenanceOpenApi();
 registerIntegrationOpenApi();
 registerSystemConfigOpenApi();

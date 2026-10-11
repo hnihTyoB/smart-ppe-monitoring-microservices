@@ -679,7 +679,57 @@
 
 ---
 
-## 🛠️ 14. CHECKLIST CHUẨN BỊ TRƯỚC GIỜ BẢO VỆ
+## 🤖 14. CHUYÊN ĐỀ SÂU: 5 CÂU HỎI VẤN ĐÁP TỪ MODULE AI VISION INTEGRATION ENDPOINT (TASK BE-15)
+
+### 🔹 Câu 68 (Task BE-15: `ai-vision.service.ts`): Cơ Chế Tự Động Làm Giàu Siêu Dữ Liệu (Smart Auto-Enrichment) & Giảm Tải Cho Edge AI
+* **Câu hỏi**: *"Tại sao ở tầng Edge AI (Python - SV2), em chỉ yêu cầu client gửi 'cameraCode' tối giản mà không ép phải gửi đầy đủ 'siteId', 'siteName', 'cameraName', 'zone'? Backend tự động làm giàu siêu dữ liệu (Data Enrichment) như thế nào để vừa tối ưu cho camera nhúng vừa đảm bảo tính toàn vẹn CSDL?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô, em thiết kế cơ chế Tự động Làm giàu Siêu dữ liệu (Smart Auto-Enrichment) dựa trên nguyên lý Độc lập ngữ cảnh (Context Decoupling):  
+  > 1) **Giảm tải tối đa cho Thiết bị Nhúng Edge AI**: Các thiết bị camera nhúng (Jetson Orin, Raspberry Pi, Camera Server) chỉ cần nạp cấu hình tối giản là mã định danh camera (`cameraCode: CAM-GATE-01`). Nếu bắt Edge AI phải lưu trữ CSDL quan hệ hoặc đồng bộ `siteId`, `siteName`, `zone` thì khi người quản trị đổi tên công trường hoặc di dời vị trí camera, toàn bộ các agent Edge AI sẽ bị lệch dữ liệu (Data Drift) và gửi gói tin sai lệch.  
+  > 2) **Tự động Bù khuyết tại Cửa ngõ (Enrichment Engine)**: Khi nhận được gói tin chỉ có `cameraCode`, `AiVisionIntegrationService` tự động truy vấn `CameraRepository` và `SiteRepository` để điền đầy đủ `camera.id`, `camera.name`, `camera.zone`, `site.id`, `site.code`, `site.name` hợp chuẩn ALL-03 trước khi xuất bản vào EventBus. Điều này đảm bảo CSDL `ppe_incident_db` luôn lưu trữ đầy đủ hồ sơ pháp lý chuẩn mực mà phía Python Edge không phải quản lý CSDL phức tạp."*
+
+---
+
+### 🔹 Câu 69 (Task BE-15: `ai-vision.service.ts`): Bóc Tách URL Bằng Chứng (Query Stripping) & Chuẩn Hóa StorageKey Bất Biến
+* **Câu hỏi**: *"Khi camera AI tải ảnh chụp vi phạm lên MinIO/S3, URL thường chứa các query parameters chữ ký số Presigned tạm thời (`?X-Amz-Signature=...&X-Amz-Expires=...`). Nếu lưu nguyên xi URL đó vào CSDL thì phát sinh rủi ro gì? Backend đã chuẩn hóa 'storageKey' ra sao?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô, việc chuẩn hóa URL bằng chứng và trích xuất StorageKey bất biến giải quyết 2 nguy cơ bảo mật và toàn vẹn dữ liệu:  
+  > 1) **Nguy cơ khi lưu nguyên xi Presigned URL**: Presigned URL của S3/MinIO chỉ có hiệu lực tạm thời (thường từ 15 phút đến 1 giờ). Nếu lưu cả chuỗi chữ ký tạm thời này vào CSDL làm `storageKey`, dữ liệu sẽ bị phình rác, chữ ký sẽ hết hạn khiến người dùng không thể xem lại ảnh sau này, đồng thời làm lộ token truy cập tạm thời của MinIO/S3 ra ngoài.  
+  > 2) **Giải pháp Chuẩn hóa Query Stripping**: Backend tự động bóc tách sạch sẽ toàn bộ query parameters (`cleanSnapshotUrl = url.split('?')[0]`) và trích xuất tên file đối tượng nguyên bản (`storageKey = filename.jpg`). Khi người dùng hoặc Frontend cần xem lại bằng chứng, hệ thống sẽ sử dụng `storageKey` này để sinh ra Presigned URL mới còn hạn một cách an toàn và tức thì."*
+
+---
+
+### 🔹 Câu 70 (Task BE-15: `ai-vision.service.ts`): Chế Độ Xử Lý Đồng Bộ (Sync Mode) vs Bất Đồng Bộ (Async Mode) & Tiêu Chuẩn Nghiệm Thu
+* **Câu hỏi**: *"Tại sao trong kiến trúc Message Broker hướng sự kiện (Event-Driven), em lại cung cấp thêm tùy chọn '?sync=true' cho AI Vision Integration Endpoint? Cơ chế Sync Mode giúp kiểm chứng tiêu chuẩn nghiệm thu 'AI event tạo incident đúng contract' ra sao?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô, em thiết kế linh hoạt cả 2 chế độ xử lý để đáp ứng 2 mục tiêu vận hành và nghiệm thu:  
+  > 1) **Chế độ Mặc định - Bất đồng bộ (Async Mode - HTTP 202 Accepted)**: Phục vụ vận hành thực tế chịu tải cao. Edge AI gửi sự kiện và nhận ngay phản hồi trong 5-10ms để tiếp tục vòng lặp suy luận video (Inference Loop) mà không bị tụt FPS. Sự kiện được đẩy vào EventBus/Outbox để 4 consumer groups xử lý ngầm.  
+  > 2) **Chế độ Đồng bộ (Sync Mode `?sync=true` - HTTP 201 Created)**: Phục vụ kiểm thử tích hợp tự động và nghiệm thu đồ án. Khi bật `sync=true`, service trực tiếp gọi `handleIncidentConsumer`, chờ bản ghi Incident và Evidence được lưu hoàn tất vào `ppe_incident_db`, sau đó phản hồi ngay mã `incidentId`, `evidenceId` và trạng thái `PENDING_REVIEW` cho client. Điều này cho phép nhóm chứng minh trực tiếp và tức thì trước Hội đồng tiêu chuẩn nghiệm thu: **AI event tạo incident đúng contract** mà không phải chuyển tab chờ đợi."*
+
+---
+
+### 🔹 Câu 71 (Task BE-15: `ai-vision.service.ts`): Xử Lý Nạp Sự Kiện Hàng Loạt (Batch Ingestion) & Phục Hồi Bộ Đệm Sau Mất Mạng (Edge Offline Recovery)
+* **Câu hỏi**: *"Khi công trường xây dựng bị mất kết nối Internet tạm thời trong 10-15 phút, thiết bị AI Edge (Python) tích lũy hàng chục vi phạm trong bộ nhớ đệm cục bộ (Local Buffer). Khi mạng có lại, endpoint '/events/batch' xử lý nạp hàng loạt như thế nào để vừa không làm nghẽn EventBus vừa chống tạo trùng Incident?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô, em thiết kế endpoint `POST /api/v1/integration/ai-vision/events/batch` chuyên trách phục hồi sau mất mạng (Edge Offline Recovery):  
+  > 1) **Giới hạn An toàn & Xử lý Tuần tự**: Schema giới hạn mỗi mẻ batch tối đa 50 sự kiện (`MAX_BATCH = 50`) để tránh tràn bộ nhớ Node.js. Các sự kiện được xử lý tuần tự có kiểm soát, phân lập lỗi từng phần (sự kiện lỗi không làm dừng các sự kiện hợp lệ khác).  
+  > 2) **Tích hợp Chống trùng Lặp (BE-13 Idempotency Engine)**: Từng sự kiện trong mẻ batch đều đi qua cửa sổ khử trùng lặp 24h. Những sự kiện đã vô tình được gửi trước đó sẽ được đánh dấu `DUPLICATE` mà không tạo thêm bản ghi incident nào trong CSDL.  
+  > 3) **Báo cáo Kết quả Minh bạch**: Endpoint trả về cấu trúc thống kê tổng hợp gồm `total`, `ingested`, `duplicates`, `failed` kèm mảng chi tiết trạng thái từng sự kiện, giúp Edge Agent tự tin dọn sạch Local Buffer của mình."*
+
+---
+
+### 🔹 Câu 72 (Task BE-15: Live Demo Integration Endpoint): Kịch bản Live Demo 2 phút trên Swagger UI & Trình duyệt
+* **Câu hỏi**: *"Em hãy trình bày kịch bản Live Demo 2 phút trên Swagger UI để chứng minh trước Hội đồng: Tra cứu hợp đồng ALL-03 (`GET /contract`), Ingest sự kiện vi phạm với 'cameraCode' tối giản có auto-enrichment, Chế độ Sync Mode trả về ngay Incident ID đã lưu trong CSDL, và Giả lập vi phạm tự động (`POST /simulate`)?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Hội đồng, em xin demo kịch bản 4 bước thực chiến trong 2 phút trên Swagger UI (`/api/docs`):  
+  > 1. **Tra cứu Hợp đồng Dữ liệu**: Gọi `GET /api/v1/integration/ai-vision/contract`. Màn hình xuất bản toàn bộ JSON Schema và mẫu gói tin vi phạm (`NO_HELMET`, `NO_VEST`), chứng minh sự đồng bộ hợp đồng kỹ thuật 100% giữa Python Edge (SV2) và Backend (SV3).  
+  > 2. **Kiểm tra Sức khỏe Đường ống**: Gọi `GET /api/v1/integration/ai-vision/health`. Swagger trả về HTTP 200 `UP`, hiển thị 4 thành phần `broker`, `cameraDatabase`, `siteDatabase`, `incidentDatabase` đều đang `CONNECTED`.  
+  > 3. **Ingest Sự kiện Tối giản với Sync Mode**: Gọi `POST /api/v1/integration/ai-vision/events?sync=true` chỉ truyền `cameraCode: "CAM-GATE-01"` và vi phạm `NO_HELMET`. Màn hình lập tức trả về HTTP 201 Created kèm `incidentId` và `evidenceId`; đồng thời chứng minh `site` và `camera` đã được tự động làm giàu đầy đủ trong phản hồi.  
+  > 4. **Mô phỏng Vi phạm Tức thì**: Gọi `POST /api/v1/integration/ai-vision/simulate` với `violationType: "RESTRICTED_AREA"`. Hệ thống tự động chọn camera đang online, sinh ảnh bằng chứng và tạo thành công Incident trong CSDL mà không cần bật GPU vật lý, khẳng định năng lực tích hợp trọn vẹn của đồ án."*
+
+---
+
+## 🛠️ 15. CHECKLIST CHUẨN BỊ TRƯỚC GIỜ BẢO VỆ
 
 - [ ] **Môi trường máy tính**:
   - Đã nạp sẵn Docker images (`postgres:16-alpine`, `confluentinc/cp-kafka:7.5.0`, `provectuslabs/kafka-ui`, `minio/minio`).
@@ -697,6 +747,7 @@
 - [ ] **Terminal chuẩn bị sẵn**:
   - Cửa sổ 1: Đang chạy `docker compose -f docker-compose.infra.yml ps`.
   - Cửa sổ 2: Thư mục dự án sẵn sàng gõ `pnpm test`.
+
 
 
 

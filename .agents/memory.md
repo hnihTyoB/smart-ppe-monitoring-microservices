@@ -1281,3 +1281,35 @@
   - **Centralized Constants & Zero Magic Strings**: Khai báo tập trung `TRACE_STAGE` (`DEAD_LETTER_QUEUE`, `IDEMPOTENCY_MUTEX`, `AUDIT_LOG`) và `TRACE_STAGE_STATUS` trong `src/common/constants/reliability.constant.ts`.
   - **Sensitive Data Filtering in Timeline**: `ReliabilityService.getTraceTimeline` chủ động lọc bỏ các trường nhạy cảm (`password`, `token`, `secret`, `authorization`, `refreshToken`, `accessToken`, `apiKey`) trong `a.details` trước khi phản hồi về client.
   - **Strict Type Safety in Structured Errors**: Thay thế toàn bộ kiểu `any` bằng `unknown` trong constructor của các subclass `AppError` tại `src/common/errors/structured-errors.ts`.
+
+- **Task BE-15: AI Vision Integration Endpoint (2026-10-12)**:
+  - **1. Cửa ngõ Tích hợp Chuyên biệt (`src/modules/integration/ai-vision.*`)**:
+    - Mount dưới tiền tố `/api/v1/integration/ai-vision/*`:
+      - `POST /events`: Tiếp nhận sự kiện vi phạm an toàn từ pipeline Edge AI (Python - SV2).
+      - `POST /events/batch`: Hỗ trợ nạp hàng loạt tối đa 50 sự kiện lưu tạm trong bộ nhớ đệm cục bộ (Local Buffer) khi mạng phục hồi (Edge Offline Recovery).
+      - `POST /simulate`: Giả lập sự kiện vi phạm phục vụ kịch bản Live Demo và kiểm thử tức thì.
+      - `GET /contract`: Xuất bản JSON Schema và tài liệu hợp đồng ALL-03 / VI-11.
+      - `GET /health`: Kiểm tra sức khỏe kết nối toàn bộ pipeline tích hợp.
+  - **2. Cơ chế Làm giàu Siêu dữ liệu Thông minh (Smart Auto-Enrichment)**:
+    - Khi Edge AI chỉ gửi `cameraCode` hoặc `cameraId` tối giản, `AiVisionIntegrationService` tự động tra cứu `CameraRepository` & `SiteRepository` để bù khuyết đầy đủ `siteId`, `siteCode`, `siteName`, `cameraName`, `zone` trước khi đưa vào EventBus.
+    - Tự động bóc tách query parameter (Query Stripping) khỏi `snapshotUrl` để lưu `storageKey` bất biến dạng `sites/{siteId}/cameras/{camId}/...jpg`, bảo vệ CSDL khỏi phình rác token tạm thời.
+  - **3. Chế độ Đồng bộ vs Bất đồng bộ (Sync vs Async Ingestion Mode)**:
+    - *Async Mode (Mặc định - HTTP 202 Accepted)*: Đưa vào hàng đợi EventBus và phản hồi ngay `eventId`, `traceId` giúp Edge duy trì FPS cao.
+    - *Sync Mode (`?sync=true` - HTTP 201 Created)*: Trực tiếp gọi Incident Consumer, lưu bản ghi vào `ppe_incident_db`, và trả về ngay thông tin `incident` (`id`, `violationType`, `severity`, `status`, `siteId`, `cameraId`, `evidenceId`), hoàn thành 100% Acceptance Criteria: **AI event tạo incident đúng contract**.
+  - **4. Bảo vệ Đa tầng & Độ tin cậy**:
+    - Tích hợp Two-Tier Idempotency (BE-13): Không sinh duplicate incident khi sự kiện gửi lại nhiều lần.
+    - Bảo lưu Trace Context (AsyncLocalStorage - BE-14) xuyên suốt quá trình xử lý.
+  - **5. OpenAPI, Code Review Hardening & Testing**:
+    - Đăng ký đầy đủ OpenAPI 3.0 trong `ai-vision.openapi.ts` đồng bộ Swagger UI `/api/docs`.
+    - **Open Code Review Remediation**:
+      - Bổ sung `validate(aiVisionSyncQuerySchema, "query")` tại các route `POST /events` và `POST /events/batch`, chuẩn hóa transform boolean an toàn.
+      - Bổ sung default fallback `{ width: 1920, height: 1080 }` cho `frameResolution` trong `aiVisionEvidenceSchema`.
+      - Bóc tách query parameters chữ ký số Presigned tạm thời cho cả `clipUrl` tương tự `snapshotUrl`.
+      - Khử hoàn toàn `as any` và magic strings, thay bằng `PPE_SEVERITY`, `PPEViolationType`, `PPESeverity`, `PPEDetectionClass`.
+      - Bổ sung bộ đệm in-memory 5s chống suy kiệt connection pool cho `GET /health`.
+      - Che giấu lỗi CSDL nội bộ trong `ingestBatch` qua phân loại `AppError`.
+    - Bộ test tự động `tests/ai-vision-integration.test.ts` bao phủ 11 test suites: **22/22 test cases PASS 100%**.
+    - Chuỗi 4 test suites backend (BE-12, BE-13, BE-14, BE-15): **91/91 tests PASS 100%**.
+    - `pnpm build`: TypeScript strict mode biên dịch sạch 0 lỗi.
+    - `pnpm run lint`: ESLint 0 errors / 0 warnings.
+

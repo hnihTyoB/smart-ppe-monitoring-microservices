@@ -63,3 +63,25 @@ export const BROKER_LIMITS = {
   DEFAULT_PAGE_SIZE: 20,
   MAX_PAGE_SIZE: 100,
 } as const;
+
+/**
+ * Trạng thái tiếp nhận sự kiện từ AI Vision Edge Pipeline (Task BE-15)
+ */
+export const AI_VISION_INGESTION_STATUS = {
+  QUEUED: "QUEUED",
+  PROCESSED: "PROCESSED",
+  DUPLICATE: "DUPLICATE",
+  FAILED: "FAILED",
+} as const;
+
+export type AiVisionIngestionStatus =
+  (typeof AI_VISION_INGESTION_STATUS)[keyof typeof AI_VISION_INGESTION_STATUS];
+
+export const AI_VISION_MODE = {
+  ASYNC: "ASYNC",
+  SYNC: "SYNC",
+} as const;
+
+export type AiVisionMode =
+  (typeof AI_VISION_MODE)[keyof typeof AI_VISION_MODE];
+
