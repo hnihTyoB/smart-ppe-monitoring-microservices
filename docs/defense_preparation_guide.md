@@ -729,7 +729,59 @@
 
 ---
 
-## 🛠️ 15. CHECKLIST CHUẨN BỊ TRƯỚC GIỜ BẢO VỆ
+## 🏛️ 15. CHUYÊN ĐỀ SÂU: 5 CÂU HỎI VẤN ĐÁP TỪ KIỂM CHỨNG & TÁI CẤU TRÚC KIẾN TRÚC MICROSERVICES (P0 - P3 REMEDIATION & CODE REVIEW HARDENING)
+
+### 🔹 Câu 73 (Kiến trúc Microservices Vệ tinh: `verifyJwtLocally` vs `authMiddleware`): Xác Thực Phi Trạng Thái & Khử Phụ Thuộc Identity DB
+* **Câu hỏi**: *"Trong thiết kế Microservices, nếu một dịch vụ vệ tinh (như Site, Camera, Incident) vẫn import 'authMiddleware' và truy vấn trực tiếp vào Identity Database mỗi khi có request, thì đó là lỗi Monolith Phân tán (Distributed Monolith). Em đã giải quyết bài toán Xác thực Cục bộ Phi trạng thái (Stateless Local Verification) bằng 'verifyJwtLocally' như thế nào để các dịch vụ vệ tinh hoạt động độc lập ngay cả khi Identity DB bị ngắt kết nối?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô, việc một Microservice vệ tinh import trực tiếp `authMiddleware` và truy vấn CSDL Identity DB là 'Mùi thiết kế' (Anti-Pattern) của Monolith Phân tán (Distributed Monolith), tạo ra điểm nghẽn phụ thuộc chết người (Single Point of Failure). Em đã khắc phục triệt để bằng cơ chế Xác thực Phi trạng thái Cục bộ (Stateless Local Verification) qua `verifyJwtLocally`:  
+  > 1) **Độc lập Dữ liệu 100%**: Toàn bộ 7 Router vệ tinh (`site`, `camera`, `incident`, `safety-rule`, `reporting`, `notification`, `file`) hoàn toàn KHÔNG import `authMiddleware` và KHÔNG kết nối vào Identity DB. Mỗi dịch vụ tự giải mã và thẩm định chữ ký JWT bằng Secret/Public Key cục bộ đã được chia sẻ an toàn qua Docker Environment.  
+  > 2) **Khả năng Chịu lỗi (Fault Tolerance)**: Khi Identity Service hoặc Identity Database bị sập, bảo trì hay nghẽn mạng, toàn bộ 4 dịch vụ vệ tinh vẫn tiếp tục tiếp nhận request, xác thực token và xử lý cảnh báo an toàn bình thường mà không bị gián đoạn.  
+  > 3) **Cơ chế Resilient Fallback**: Tầng phân quyền `permission.middleware.ts` kiểm tra trước trên Redis Cache; nếu Identity DB không phản hồi, hệ thống kích hoạt chế độ Fallback dựa trên Claims vai trò trong JWT (`ROLES.ADMIN`, `ROLES.SAFETY_MANAGER`) để duy trì hoạt động tối thiểu."*
+
+---
+
+### 🔹 Câu 74 (Lỗ Hổng Quyền Lực Admin Bypass trong `permission.middleware.ts`): Kiểm Tra Trạng Thái Thực Tế & Chống Leo Thang Đặc Quyền
+* **Câu hỏi**: *"Nhiều hệ thống thường đặt 'if (req.user.role === ADMIN) return next();' ngay ở dòng đầu tiên của middleware phân quyền. Đoạn mã này ẩn chứa lỗ hổng bảo mật nghiêm trọng nào khi một tài khoản Admin bị Giám đốc khóa (isActive = false) hoặc bị xóa mềm (deletedAt)? Em đã tái cấu trúc luồng kiểm tra trạng thái tài khoản trong permission.middleware.ts như thế nào?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô, việc đặt Admin bypass ở đầu middleware là lỗ hổng an ninh nghiêm trọng (Critical Privilege Escalation): JWT vốn là phi trạng thái và còn hạn dùng (15-60 phút). Nếu một Admin bị kỷ luật, bị sa thải hoặc bị xóa mềm (`deletedAt`), nếu cho bypass ngay ở dòng đầu thì đối tượng vẫn dùng JWT cũ gọi mọi API nhạy cảm (xóa camera, can thiệp sự cố) cho đến khi token hết hạn.  
+  > Em đã tái cấu trúc luồng kiểm soát 3 bước chặt chẽ:  
+  > 1) **Bước 1 (Kiểm tra Trạng thái Thực tế)**: Tra cứu nhanh trạng thái tài khoản thời gian thực qua Cache/DB (`getUserState`).  
+  > 2) **Bước 2 (Chặn Đứng Ngay Lập Tức - Fail-Closed)**: Từ chối 403 Forbidden ngay nếu tài khoản không tồn tại (`currentUser === null`), đang bị vô hiệu hóa (`!currentUser.isActive`) hoặc đã bị xóa mềm (`currentUser.deletedAt`).  
+  > 3) **Bước 3 (Admin Bypass An Toàn)**: CHỈ KHI tài khoản được xác thực là đang tồn tại và hoạt động hợp lệ thì mới cho phép Admin bypass (`req.user.role === ROLES.ADMIN`), triệt tiêu hoàn toàn nguy cơ lạm dụng quyền lực."*
+
+---
+
+### 🔹 Câu 75 (Fail-Open Circuit Breaker cho Chế Độ Bảo Trì `maintenance-cache.service.ts`): Đảm Bảo Sẵn Sàng Cao 24/7
+* **Câu hỏi**: *"Chế độ Bảo trì (Maintenance Mode) dùng để tạm dừng hệ thống khi nâng cấp. Trong một hệ thống giám sát an toàn lao động 24/7, nếu cơ sở dữ liệu lưu cấu hình bảo trì bị sập hoặc quá tải, hệ thống của em sẽ phản ứng thế nào? Tại sao em lại áp dụng nguyên lý Fail-Open In-Memory Circuit Breaker thay vì Fail-Closed trong maintenance-cache.service.ts?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô, trong hệ thống giám sát an toàn công trường (Life-Safety System), nguyên tắc sống còn là 'Camera và Cảnh báo vi phạm phải luôn hoạt động 24/7':  
+  > 1) **Nguy cơ nếu chọn Fail-Closed**: Nếu CSDL bảo trì gặp sự cố mà hệ thống ném lỗi 500 hoặc tự khóa lại, thì một trục trặc nhỏ ở bảng cấu hình phụ trợ sẽ làm sập toàn bộ hệ thống phát hiện tai nạn, đe dọa trực tiếp tính mạng công nhân.  
+  > 2) **Giải pháp Fail-Open Circuit Breaker**: Trong `maintenanceCacheService`, em lưu đệm cấu hình trên RAM (TTL 60s). Khi CSDL gặp sự cố ngắt kết nối (`Can't reach database server`), service tự động bắt lỗi an toàn (`catch (err: unknown)`) và kích hoạt Circuit Breaker, trả về Fallback Config mặc định là ONLINE (`status: 'ONLINE', enabled: false`) thay vì làm sập API. Nhờ đó, camera AI và luồng xử lý sự cố vẫn tiếp tục chạy bình thường 100%, bảo đảm tính sẵn sàng cao (High Availability)."*
+
+---
+
+### 🔹 Câu 76 (Zero-Trust API Gateway: Traefik Dynamic Secret Injection & Decoupled Health Checks): Phòng Thủ Trực Tiếp & Phân Tầng Chuẩn Mực
+* **Câu hỏi**: *"Làm sao em ngăn chặn kẻ tấn công truy cập trực tiếp vào các cổng nội bộ của các dịch vụ vệ tinh (như port 8891, 8892) mà bỏ qua API Gateway Traefik? Em đã thiết kế cơ chế tiêm mã bí mật (Traefik Dynamic Secret Injection) ra sao? Và tại sao việc các file 'app.ts' gọi trực tiếp Prisma '$queryRaw' trong endpoint /health lại vi phạm ranh giới kiến trúc?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Thầy/Cô, em thiết kế bảo vệ Zero-Trust API Gateway và chuẩn hóa phân tầng kiến trúc:  
+  > 1) **Chống gọi tắt (Bypass) bằng Traefik Secret Injection**: Mọi request từ ngoài vào bắt buộc qua Traefik (cổng 80/443). Middleware của Traefik tự động tiêm header nội bộ `x-gateway-secret: ${GATEWAY_SHARED_SECRET}` vào gói tin trước khi forward vào mạng container. Các microservice vệ tinh kiểm tra header này; nếu kẻ xấu quét cổng gọi trực tiếp vào 8891/8892 sẽ bị chặn ngay với 403 Forbidden.  
+  > 2) **Chuẩn hóa Ranh giới Layer (`checkDatabaseHealth`)**: Việc gọi trực tiếp `prisma.$queryRaw` trong các file `app.ts` vi phạm quy ước phân tầng nghiêm ngặt (tầng App/HTTP không được chứa logic truy vấn CSDL). Em đã chuyển toàn bộ việc kiểm tra kết nối DB vào phương thức `checkDatabaseHealth()` của từng Repository (`SiteRepository`, `CameraRepository`, `IncidentRepository`, `ReportingRepository`), giữ cho file `app.ts` trong sáng và đúng ranh giới trách nhiệm."*
+
+---
+
+### 🔹 Câu 77 (Live Demo Kiến Trúc Microservices): Kịch bản Live Demo 2 phút Chạy 26 Tests Tự Động & Chứng Minh Độc Lập
+* **Câu hỏi**: *"Em hãy trình bày kịch bản Live Demo 2 phút chứng minh trước Hội đồng: Kiến trúc 4 container microservices vệ tinh độc lập qua Docker Compose & Traefik, Xác thực cục bộ verifyJwtLocally không phụ thuộc Identity DB, Cơ chế Fail-Open Circuit Breaker hoạt động khi CSDL bảo trì offline, và Chạy bộ kiểm thử tự động 26 tests đạt 100% PASS?"*
+* **Câu trả lời chuẩn**:
+  > *"Dạ thưa Hội đồng, em xin demo kịch bản 4 bước thực chiến trong 2 phút trên Swagger UI (`/api/docs`) và Terminal:  
+  > 1. **Minh chứng Độc lập Container**: Mở Terminal gõ `docker compose ps`, chỉ rõ 4 container microservices vệ tinh (`site-service`, `camera-service`, `incident-service`, `reporting-service`) đang chạy trên các container độc lập và được bảo vệ sau Traefik Gateway.  
+  > 2. **Kiểm chứng Xác thực Cục bộ**: Trên Swagger, gọi `GET /api/v1/sites` với Bearer Token; hệ thống trả về 200 tức thì, chứng minh `verifyJwtLocally` thẩm định chữ ký cục bộ mượt mà mà không phụ thuộc Identity DB.  
+  > 3. **Kiểm chứng Fail-Open Circuit Breaker**: Minh chứng khi CSDL bảo trì gặp sự cố, hệ thống tự động kích hoạt Circuit Breaker fallback về 'ONLINE' (`status: ONLINE, enabled: false`), giữ cho luồng an toàn lao động không bao giờ bị gián đoạn.  
+  > 4. **Chạy Test Suite Tự động Trước Hội đồng**: Chạy trực tiếp `pnpm exec tsx --test tests/verify-13-architecture-issues.test.ts tests/verify-code-review-12-fixes.test.ts`, hiển thị toàn bộ 26/26 Tests PASS (100%), khẳng định toàn bộ 13 lỗi kiến trúc từ P0 đến P3 và 12 điểm code review đã được tự động kiểm chứng và khắc phục triệt để."*
+
+---
+
+## 🛠️ 16. CHECKLIST CHUẨN BỊ TRƯỚC GIỜ BẢO VỆ
 
 - [ ] **Môi trường máy tính**:
   - Đã nạp sẵn Docker images (`postgres:16-alpine`, `confluentinc/cp-kafka:7.5.0`, `provectuslabs/kafka-ui`, `minio/minio`).
@@ -747,6 +799,7 @@
 - [ ] **Terminal chuẩn bị sẵn**:
   - Cửa sổ 1: Đang chạy `docker compose -f docker-compose.infra.yml ps`.
   - Cửa sổ 2: Thư mục dự án sẵn sàng gõ `pnpm test`.
+
 
 
 

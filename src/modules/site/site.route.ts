@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { siteController } from "./site.controller";
-import { authMiddleware } from "../../middlewares/auth.middleware";
+import { verifyJwtLocally } from "../../middlewares/verify-jwt-locally.middleware";
 import { requirePermission } from "../../middlewares/permission.middleware";
 import { validate } from "../../middlewares/validate.middleware";
 import { PERMISSIONS } from "../../common/constants/permission.constant";
@@ -27,7 +27,7 @@ export const siteRouter = Router();
 
 siteRouter.get(
   "/",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_SITE_READ),
   validate(siteQuerySchema, "query"),
   siteController.findAllSites,
@@ -35,7 +35,7 @@ siteRouter.get(
 
 siteRouter.post(
   "/",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_SITE_MANAGE),
   validate(createSiteSchema),
   siteController.createSite,
@@ -43,7 +43,7 @@ siteRouter.post(
 
 siteRouter.get(
   "/:id",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_SITE_READ),
   validate(siteIdParamSchema, "params"),
   siteController.findSiteById,
@@ -51,7 +51,7 @@ siteRouter.get(
 
 siteRouter.put(
   "/:id",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_SITE_MANAGE),
   validate(siteIdParamSchema, "params"),
   validate(updateSiteSchema),
@@ -60,7 +60,7 @@ siteRouter.put(
 
 siteRouter.delete(
   "/:id",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_SITE_MANAGE),
   validate(siteIdParamSchema, "params"),
   siteController.deleteSite,
@@ -69,7 +69,7 @@ siteRouter.delete(
 // Safety Config
 siteRouter.get(
   "/:id/safety-config",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_SAFETY_CONFIG_READ),
   validate(siteIdParamSchema, "params"),
   siteController.getSafetyConfig,
@@ -77,7 +77,7 @@ siteRouter.get(
 
 siteRouter.put(
   "/:id/safety-config",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_SAFETY_CONFIG_MANAGE),
   validate(siteIdParamSchema, "params"),
   validate(updateSiteSafetyConfigSchema),
@@ -87,7 +87,7 @@ siteRouter.put(
 // Nested Site Zones
 siteRouter.get(
   "/:id/zones",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_ZONE_READ),
   validate(siteIdParamSchema, "params"),
   validate(zoneQuerySchema, "query"),
@@ -96,7 +96,7 @@ siteRouter.get(
 
 siteRouter.post(
   "/:id/zones",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_ZONE_MANAGE),
   validate(siteIdParamSchema, "params"),
   validate(createZoneSchema.omit({ siteId: true })),
@@ -106,7 +106,7 @@ siteRouter.post(
 // Nested Site Restricted Areas
 siteRouter.get(
   "/:id/restricted-areas",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_RESTRICTED_AREA_READ),
   validate(siteIdParamSchema, "params"),
   validate(restrictedAreaQuerySchema, "query"),
@@ -115,7 +115,7 @@ siteRouter.get(
 
 siteRouter.post(
   "/:id/restricted-areas",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_RESTRICTED_AREA_MANAGE),
   validate(siteIdParamSchema, "params"),
   validate(createRestrictedAreaSchema.omit({ siteId: true })),
@@ -127,7 +127,7 @@ export const zoneRouter = Router();
 
 zoneRouter.get(
   "/",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_ZONE_READ),
   validate(zoneQuerySchema, "query"),
   siteController.findAllZones,
@@ -135,7 +135,7 @@ zoneRouter.get(
 
 zoneRouter.post(
   "/",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_ZONE_MANAGE),
   validate(createZoneDirectSchema),
   siteController.createZone,
@@ -143,7 +143,7 @@ zoneRouter.post(
 
 zoneRouter.get(
   "/:id",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_ZONE_READ),
   validate(zoneIdParamSchema, "params"),
   siteController.findZoneById,
@@ -151,7 +151,7 @@ zoneRouter.get(
 
 zoneRouter.put(
   "/:id",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_ZONE_MANAGE),
   validate(zoneIdParamSchema, "params"),
   validate(updateZoneSchema),
@@ -160,7 +160,7 @@ zoneRouter.put(
 
 zoneRouter.delete(
   "/:id",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_ZONE_MANAGE),
   validate(zoneIdParamSchema, "params"),
   siteController.deleteZone,
@@ -168,7 +168,7 @@ zoneRouter.delete(
 
 zoneRouter.get(
   "/:id/restricted-areas",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_RESTRICTED_AREA_READ),
   validate(zoneIdParamSchema, "params"),
   validate(restrictedAreaQuerySchema, "query"),
@@ -180,7 +180,7 @@ export const restrictedAreaRouter = Router();
 
 restrictedAreaRouter.get(
   "/",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_RESTRICTED_AREA_READ),
   validate(restrictedAreaQuerySchema, "query"),
   siteController.findAllRestrictedAreas,
@@ -188,7 +188,7 @@ restrictedAreaRouter.get(
 
 restrictedAreaRouter.post(
   "/",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_RESTRICTED_AREA_MANAGE),
   validate(createRestrictedAreaDirectSchema),
   siteController.createRestrictedArea,
@@ -196,7 +196,7 @@ restrictedAreaRouter.post(
 
 restrictedAreaRouter.get(
   "/:id",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_RESTRICTED_AREA_READ),
   validate(restrictedAreaIdParamSchema, "params"),
   siteController.findRestrictedAreaById,
@@ -204,7 +204,7 @@ restrictedAreaRouter.get(
 
 restrictedAreaRouter.put(
   "/:id",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_RESTRICTED_AREA_MANAGE),
   validate(restrictedAreaIdParamSchema, "params"),
   validate(updateRestrictedAreaSchema),
@@ -213,7 +213,7 @@ restrictedAreaRouter.put(
 
 restrictedAreaRouter.delete(
   "/:id",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_RESTRICTED_AREA_MANAGE),
   validate(restrictedAreaIdParamSchema, "params"),
   siteController.deleteRestrictedArea,

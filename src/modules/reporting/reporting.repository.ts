@@ -972,6 +972,15 @@ export class ReportingRepository {
       };
     });
   }
+
+  async checkDatabaseHealth(): Promise<boolean> {
+    try {
+      await (reportingPrisma as any).$queryRaw`SELECT 1`;
+      return true;
+    } catch {
+      return false;
+    }
+  }
 }
 
 export const reportingRepository = new ReportingRepository();

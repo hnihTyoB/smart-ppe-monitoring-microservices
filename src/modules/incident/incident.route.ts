@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { incidentController } from "./incident.controller";
-import { authMiddleware } from "../../middlewares/auth.middleware";
+import { verifyJwtLocally } from "../../middlewares/verify-jwt-locally.middleware";
 import { requirePermission } from "../../middlewares/permission.middleware";
 import { validate } from "../../middlewares/validate.middleware";
 import { uploadImageMiddleware } from "../../middlewares/upload.middleware";
@@ -30,7 +30,7 @@ export const incidentRouter = Router();
 
 incidentRouter.get(
   "/",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_INCIDENT_READ),
   validate(incidentQuerySchema, "query"),
   incidentController.findAllIncidents,
@@ -38,7 +38,7 @@ incidentRouter.get(
 
 incidentRouter.post(
   "/",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_INCIDENT_MANAGE),
   validate(createIncidentSchema),
   incidentController.createIncident,
@@ -46,7 +46,7 @@ incidentRouter.post(
 
 incidentRouter.get(
   "/:id",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_INCIDENT_READ),
   validate(incidentIdParamSchema, "params"),
   incidentController.findIncidentById,
@@ -54,7 +54,7 @@ incidentRouter.get(
 
 incidentRouter.put(
   "/:id",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_INCIDENT_UPDATE),
   validate(incidentIdParamSchema, "params"),
   validate(updateIncidentSchema),
@@ -63,7 +63,7 @@ incidentRouter.put(
 
 incidentRouter.delete(
   "/:id",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_INCIDENT_DELETE),
   validate(incidentIdParamSchema, "params"),
   incidentController.deleteIncident,
@@ -72,7 +72,7 @@ incidentRouter.delete(
 // ── Incident Lifecycle Transitions ─────────────────────────────────────────
 incidentRouter.post(
   "/:id/review",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_INCIDENT_REVIEW),
   validate(incidentIdParamSchema, "params"),
   validate(reviewIncidentSchema),
@@ -81,7 +81,7 @@ incidentRouter.post(
 
 incidentRouter.post(
   "/:id/resolve",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_INCIDENT_UPDATE),
   validate(incidentIdParamSchema, "params"),
   validate(resolveIncidentSchema),
@@ -90,7 +90,7 @@ incidentRouter.post(
 
 incidentRouter.post(
   "/:id/close",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_INCIDENT_MANAGE),
   validate(incidentIdParamSchema, "params"),
   validate(closeIncidentSchema),
@@ -100,7 +100,7 @@ incidentRouter.post(
 // ── Incident Assignments & Comments ────────────────────────────────────────
 incidentRouter.get(
   "/:id/assignments",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_INCIDENT_READ),
   validate(incidentIdParamSchema, "params"),
   incidentController.getIncidentAssignments,
@@ -108,7 +108,7 @@ incidentRouter.get(
 
 incidentRouter.post(
   "/:id/assignments",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_INCIDENT_MANAGE),
   validate(incidentIdParamSchema, "params"),
   validate(createIncidentAssignmentSchema),
@@ -117,7 +117,7 @@ incidentRouter.post(
 
 incidentRouter.get(
   "/:id/comments",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_INCIDENT_READ),
   validate(incidentIdParamSchema, "params"),
   incidentController.getIncidentComments,
@@ -125,7 +125,7 @@ incidentRouter.get(
 
 incidentRouter.post(
   "/:id/comments",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_INCIDENT_UPDATE),
   validate(incidentIdParamSchema, "params"),
   validate(createIncidentCommentSchema),
@@ -135,7 +135,7 @@ incidentRouter.post(
 // ── Incident Evidences (Nested) ─────────────────────────────────────────────
 incidentRouter.post(
   "/:id/evidences",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_INCIDENT_UPDATE),
   validate(incidentIdParamSchema, "params"),
   validate(createEvidenceSchema),
@@ -148,7 +148,7 @@ export const evidenceRouter = Router();
 // Presigned Upload URL cho AI pipeline hoặc client
 evidenceRouter.post(
   "/upload-url",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_INCIDENT_UPDATE),
   validate(requestEvidenceUploadUrlSchema),
   incidentController.requestEvidenceUploadUrl,
@@ -157,7 +157,7 @@ evidenceRouter.post(
 // Direct Multipart Upload (nhận file buffer, trích xuất metadata và lưu MinIO)
 evidenceRouter.post(
   "/direct-upload",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_INCIDENT_UPDATE),
   uploadImageMiddleware.single("file"),
   validate(directUploadEvidenceSchema),
@@ -166,7 +166,7 @@ evidenceRouter.post(
 
 evidenceRouter.get(
   "/",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_INCIDENT_READ),
   validate(evidenceQuerySchema, "query"),
   incidentController.findAllEvidences,
@@ -174,7 +174,7 @@ evidenceRouter.get(
 
 evidenceRouter.get(
   "/:id",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_INCIDENT_READ),
   validate(evidenceIdParamSchema, "params"),
   incidentController.findEvidenceById,
@@ -183,7 +183,7 @@ evidenceRouter.get(
 // Presigned Download / View URL
 evidenceRouter.get(
   "/:id/download-url",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_INCIDENT_READ),
   validate(evidenceIdParamSchema, "params"),
   validate(downloadUrlQuerySchema, "query"),
@@ -193,7 +193,7 @@ evidenceRouter.get(
 // Xác thực tính toàn vẹn pháp lý (Tamper Evidence Checksum Verification - Mục 1 & 2.1 D08.pdf)
 evidenceRouter.get(
   "/:id/verify-checksum",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_INCIDENT_READ),
   validate(evidenceIdParamSchema, "params"),
   incidentController.verifyEvidenceIntegrity,
@@ -201,7 +201,7 @@ evidenceRouter.get(
 
 evidenceRouter.delete(
   "/:id",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_INCIDENT_DELETE),
   validate(evidenceIdParamSchema, "params"),
   incidentController.deleteEvidence,

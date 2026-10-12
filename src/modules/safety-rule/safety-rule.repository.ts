@@ -1,7 +1,7 @@
 import { sitePrisma } from "../../database/site.client";
 import { cameraPrisma } from "../../database/camera.client";
 import { reportingPrisma } from "../../database/reporting.client";
-import { rbacRepository, RbacRepository } from "../rbac/rbac.repository";
+import { rbacRepository, type RbacRepository } from "../rbac/rbac.repository";
 import {
   UpdateSiteSafetyConfigDto,
   UpdateCameraSafetyConfigDto,
@@ -18,7 +18,7 @@ export class SafetyRuleRepository {
   private readonly siteDb = sitePrisma;
   private readonly cameraDb = cameraPrisma;
   private readonly reportingDb = reportingPrisma;
-  private readonly rbacRepo: RbacRepository;
+  private readonly rbacRepo?: RbacRepository;
 
   constructor(rbacRepo?: RbacRepository) {
     this.rbacRepo = rbacRepo || rbacRepository;
@@ -261,7 +261,7 @@ export class SafetyRuleRepository {
     ipAddress?: string;
     userAgent?: string;
   }) {
-    if (!params.actorId) return;
+    if (!params.actorId || !this.rbacRepo) return;
     try {
       await this.rbacRepo.createAuditLog({
         actorId: params.actorId,
@@ -272,10 +272,10 @@ export class SafetyRuleRepository {
         ipAddress: params.ipAddress,
         userAgent: params.userAgent,
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.warn(
         "[SafetyRule] Failed to record audit log:",
-        err?.message || err,
+        (err as Error)?.message || err,
       );
     }
   }

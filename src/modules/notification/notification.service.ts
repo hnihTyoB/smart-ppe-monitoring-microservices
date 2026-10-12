@@ -48,7 +48,7 @@ import {
 
 export class NotificationService {
   private readonly repository: NotificationRepository;
-  private readonly userRepo: UserRepository;
+  private readonly userRepo?: UserRepository;
   private readonly mail: MailService;
   private readonly sse: SseManagerService;
   private readonly emailTemplateService: EmailTemplateService;
@@ -113,10 +113,13 @@ export class NotificationService {
 
     // 1. Xác định danh sách người nhận (Safety Officers / Safety Managers)
     let recipientIds = dto.recipientUserIds || [];
-    if (recipientIds.length === 0) {
-      // Nếu không chỉ định cụ thể, lấy danh sách người dùng active trong hệ thống
-      const activeUsers = await this.userRepo.getActiveUsersChunk(100);
-      recipientIds = activeUsers.map((u) => u.id);
+    if (recipientIds.length === 0 && this.userRepo) {
+      try {
+        const activeUsers = await this.userRepo.getActiveUsersChunk(100);
+        recipientIds = activeUsers.map((u: { id: string }) => u.id);
+      } catch {
+        // Fallback khi không truy cập được User DB
+      }
     }
 
     if (recipientIds.length === 0) {
@@ -129,8 +132,17 @@ export class NotificationService {
     }
 
     // 2. Tra cứu thông tin người dùng nhận tin để lấy email
-    const users = await this.userRepo.findActiveUsersByIds(recipientIds);
-    const userMap = new Map(users.map((u) => [u.id, u]));
+    let userMap = new Map<string, { id: string; email?: string }>();
+    if (this.userRepo && recipientIds.length > 0) {
+      try {
+        const users = await this.userRepo.findActiveUsersByIds(recipientIds);
+        userMap = new Map(
+          users.map((u) => [u.id, { id: u.id, email: u.email || undefined }]),
+        );
+      } catch {
+        // Graceful fallback
+      }
+    }
 
     // 3. Render nội dung cảnh báo vi phạm PPE
     const title = `🚨 Cảnh báo vi phạm PPE [${severity}]: ${dto.violationType} tại ${dto.siteName || "Công trường"}`;
@@ -236,8 +248,9 @@ export class NotificationService {
       const emailEnabled = emailPref ? emailPref.enabled : true;
       const emailThreshold = (emailPref?.severityThreshold || NOTIFICATION_SEVERITY.HIGH) as NotificationSeverity;
       const emailThresholdWeight = SEVERITY_WEIGHT[emailThreshold] || 3;
+      const userEmail = user?.email;
 
-      if (emailEnabled && severityWeight >= emailThresholdWeight && user?.email) {
+      if (emailEnabled && severityWeight >= emailThresholdWeight && userEmail) {
         notificationsToCreate.push({
           userId,
           incidentId: dto.incidentId,
@@ -259,7 +272,7 @@ export class NotificationService {
 
         // Gửi email bất đồng bộ qua MailService
         this.mail
-          .sendPpeViolationAlertEmail(user.email, {
+          .sendPpeViolationAlertEmail(userEmail, {
             incidentId: dto.incidentId,
             violationType: dto.violationType,
             severity,
@@ -271,7 +284,7 @@ export class NotificationService {
           })
           .catch((err) => {
             console.warn(
-              `[NotificationService] Không thể gửi email cảnh báo PPE tới ${user.email}:`,
+              `[NotificationService] Không thể gửi email cảnh báo PPE tới ${userEmail}:`,
               err?.message || err,
             );
           });
@@ -451,30 +464,32 @@ export class NotificationService {
     let cursorId: string | undefined;
     let totalRecipients = 0;
 
-    while (true) {
-      const usersChunk = await this.userRepo.getActiveUsersChunk(
-        BATCH_SIZE,
-        cursorId,
-      );
-      if (usersChunk.length === 0) break;
+    if (this.userRepo) {
+      while (true) {
+        const usersChunk = await this.userRepo.getActiveUsersChunk(
+          BATCH_SIZE,
+          cursorId,
+        );
+        if (usersChunk.length === 0) break;
 
-      const records = usersChunk.map((u) => ({
-        userId: u.id,
-        incidentId: null,
-        templateId: null,
-        channel: NOTIFICATION_CHANNEL.IN_APP,
-        title: dto.title,
-        content: dto.content,
-        severity: dto.severity || NOTIFICATION_SEVERITY.NORMAL,
-        status: NOTIFICATION_STATUS.SENT,
-        sentAt: new Date(),
-      }));
+        const records = usersChunk.map((u: { id: string }) => ({
+          userId: u.id,
+          incidentId: null,
+          templateId: null,
+          channel: NOTIFICATION_CHANNEL.IN_APP,
+          title: dto.title,
+          content: dto.content,
+          severity: dto.severity || NOTIFICATION_SEVERITY.NORMAL,
+          status: NOTIFICATION_STATUS.SENT,
+          sentAt: new Date(),
+        }));
 
-      await this.repository.createManyNotifications(records);
-      totalRecipients += usersChunk.length;
-      cursorId = usersChunk[usersChunk.length - 1].id;
+        await this.repository.createManyNotifications(records);
+        totalRecipients += usersChunk.length;
+        cursorId = usersChunk[usersChunk.length - 1].id;
 
-      if (usersChunk.length < BATCH_SIZE) break;
+        if (usersChunk.length < BATCH_SIZE) break;
+      }
     }
 
     if (totalRecipients > 0) {

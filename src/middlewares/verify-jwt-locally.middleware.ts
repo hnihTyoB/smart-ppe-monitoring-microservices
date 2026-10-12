@@ -5,6 +5,7 @@ import { ERROR_CODE } from "../common/errors/error-code";
 import {
   JWT_ALGORITHM,
   JWKS_CONSTANTS,
+  JWT_PURPOSE,
 } from "../common/constants/jwt.constant";
 import {
   jwtKeyService,
@@ -235,6 +236,32 @@ export function createVerifyJwtLocally(options: VerifyJwtLocallyOptions = {}) {
       return next(new AppError("Unauthorized", 401, ERROR_CODE.UNAUTHORIZED));
     }
 
+    const cleanPath = (
+      (req.baseUrl || "") + (req.path || req.originalUrl || "")
+    ).split("?")[0];
+    const isStreamPath = cleanPath.endsWith("/stream");
+
+    // Nếu là stream connection, ưu tiên verify bằng tempSecret dành cho short-lived SSE ticket
+    if (isStreamPath) {
+      try {
+        const payload = jwt.verify(token, jwtConfig.tempSecret, {
+          algorithms: [JWT_ALGORITHM.HS256],
+        }) as AccessTokenClaims;
+
+        if (payload.purpose === JWT_PURPOSE.SSE_STREAM_TICKET) {
+          req.user = {
+            id: payload.id,
+            email: payload.email,
+            role: payload.role as any,
+            roleId: payload.roleId,
+          };
+          return next();
+        }
+      } catch {
+        // Fallback sang accessSecret / RS256 bên dưới
+      }
+    }
+
     try {
       // 1. Phân tích header của token mà chưa verify chữ ký
       const decodedComplete = jwt.decode(token, { complete: true });
@@ -257,9 +284,11 @@ export function createVerifyJwtLocally(options: VerifyJwtLocallyOptions = {}) {
           }) as AccessTokenClaims;
 
           if (
-            payload.purpose === "2FA_VERIFICATION" ||
+            payload.purpose === JWT_PURPOSE.TWO_FACTOR ||
             payload.type === "TEMP" ||
-            (payload.purpose && payload.purpose !== "ACCESS")
+            (payload.purpose &&
+              payload.purpose !== JWT_PURPOSE.ACCESS &&
+              (!isStreamPath || payload.purpose !== JWT_PURPOSE.SSE_STREAM_TICKET))
           ) {
             throw new AppError(
               "Token không hợp lệ để truy cập tài nguyên được bảo vệ",
@@ -325,9 +354,11 @@ export function createVerifyJwtLocally(options: VerifyJwtLocallyOptions = {}) {
 
       // 5. Kiểm tra mục đích token (bảo vệ chống token tạm thời / 2FA)
       if (
-        payload.purpose === "2FA_VERIFICATION" ||
+        payload.purpose === JWT_PURPOSE.TWO_FACTOR ||
         payload.type === "TEMP" ||
-        (payload.purpose && payload.purpose !== "ACCESS")
+        (payload.purpose &&
+          payload.purpose !== JWT_PURPOSE.ACCESS &&
+          (!isStreamPath || payload.purpose !== JWT_PURPOSE.SSE_STREAM_TICKET))
       ) {
         throw new AppError(
           "Token không hợp lệ để truy cập tài nguyên được bảo vệ",

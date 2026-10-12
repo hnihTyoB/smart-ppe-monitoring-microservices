@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { cameraController } from "./camera.controller";
-import { authMiddleware } from "../../middlewares/auth.middleware";
+import { verifyJwtLocally } from "../../middlewares/verify-jwt-locally.middleware";
 import { requirePermission } from "../../middlewares/permission.middleware";
 import { validate } from "../../middlewares/validate.middleware";
 import { PERMISSIONS } from "../../common/constants/permission.constant";
@@ -22,7 +22,7 @@ export const cameraRouter = Router();
 
 cameraRouter.get(
   "/",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_CAMERA_READ),
   validate(cameraQuerySchema, "query"),
   cameraController.findAllCameras,
@@ -30,7 +30,7 @@ cameraRouter.get(
 
 cameraRouter.post(
   "/",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_CAMERA_MANAGE),
   validate(createCameraSchema),
   cameraController.createCamera,
@@ -38,7 +38,7 @@ cameraRouter.post(
 
 cameraRouter.get(
   "/:id",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_CAMERA_READ),
   validate(cameraIdParamSchema, "params"),
   cameraController.findCameraById,
@@ -46,7 +46,7 @@ cameraRouter.get(
 
 cameraRouter.put(
   "/:id",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_CAMERA_MANAGE),
   validate(cameraIdParamSchema, "params"),
   validate(updateCameraSchema),
@@ -55,7 +55,7 @@ cameraRouter.put(
 
 cameraRouter.delete(
   "/:id",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_CAMERA_MANAGE),
   validate(cameraIdParamSchema, "params"),
   cameraController.deleteCamera,
@@ -64,7 +64,7 @@ cameraRouter.delete(
 // Camera Config
 cameraRouter.get(
   "/:id/config",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_CAMERA_READ),
   validate(cameraIdParamSchema, "params"),
   cameraController.getCameraConfig,
@@ -72,7 +72,7 @@ cameraRouter.get(
 
 cameraRouter.put(
   "/:id/config",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_CAMERA_MANAGE),
   validate(cameraIdParamSchema, "params"),
   validate(updateCameraConfigSchema),
@@ -82,7 +82,7 @@ cameraRouter.put(
 // Camera Streams (Nested)
 cameraRouter.get(
   "/:id/streams",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_CAMERA_READ),
   validate(cameraIdParamSchema, "params"),
   cameraController.getCameraStreams,
@@ -90,7 +90,7 @@ cameraRouter.get(
 
 cameraRouter.post(
   "/:id/streams",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_CAMERA_MANAGE),
   validate(cameraIdParamSchema, "params"),
   validate(createCameraStreamSchema.omit({ cameraId: true })),
@@ -100,7 +100,7 @@ cameraRouter.post(
 // Camera Health & Ping
 cameraRouter.get(
   "/:id/health-logs",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_CAMERA_READ),
   validate(cameraIdParamSchema, "params"),
   validate(cameraHealthLogQuerySchema, "query"),
@@ -109,7 +109,7 @@ cameraRouter.get(
 
 cameraRouter.post(
   "/:id/ping",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_CAMERA_MANAGE),
   validate(cameraIdParamSchema, "params"),
   cameraController.pingCamera,
@@ -120,7 +120,7 @@ export const cameraStreamRouter = Router();
 
 cameraStreamRouter.post(
   "/",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_CAMERA_MANAGE),
   validate(createCameraStreamDirectSchema),
   cameraController.createCameraStreamDirect,
@@ -128,7 +128,7 @@ cameraStreamRouter.post(
 
 cameraStreamRouter.get(
   "/:id",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_CAMERA_READ),
   validate(streamIdParamSchema, "params"),
   cameraController.findCameraStreamById,
@@ -136,7 +136,7 @@ cameraStreamRouter.get(
 
 cameraStreamRouter.put(
   "/:id",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_CAMERA_MANAGE),
   validate(streamIdParamSchema, "params"),
   validate(updateCameraStreamSchema),
@@ -145,7 +145,7 @@ cameraStreamRouter.put(
 
 cameraStreamRouter.delete(
   "/:id",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_CAMERA_MANAGE),
   validate(streamIdParamSchema, "params"),
   cameraController.deleteCameraStream,

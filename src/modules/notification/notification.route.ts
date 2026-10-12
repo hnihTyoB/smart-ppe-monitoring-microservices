@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { NotificationController, notificationController } from "./notification.controller";
-import { authMiddleware } from "../../middlewares/auth.middleware";
+import { verifyJwtLocally } from "../../middlewares/verify-jwt-locally.middleware";
 import { requirePermission, requireAnyPermission } from "../../middlewares/permission.middleware";
 import { validate } from "../../middlewares/validate.middleware";
 import {
@@ -25,7 +25,7 @@ import { PERMISSIONS } from "../../common/constants/permission.constant";
 const router = Router();
 const controller = notificationController;
 
-router.use(authMiddleware);
+router.use(verifyJwtLocally);
 
 // ─────────────────────────────────────────────
 // Realtime SSE Stream & Ticket

@@ -98,10 +98,14 @@ export function maintenanceGuard(options?: MaintenanceGuardOptions) {
       // If user is authenticated, check bypass permissions / roles
       if (user) {
         // P2-08: Ensure user is still active before granting maintenance bypass
-        const userState = await permissionCacheService.getUserState(user.id);
-        if (userState && (!userState.isActive || userState.deletedAt)) {
-          user = undefined;
-          delete (req as any).user;
+        try {
+          const userState = await permissionCacheService.getUserState(user.id);
+          if (userState && (!userState.isActive || userState.deletedAt)) {
+            user = undefined;
+            delete (req as any).user;
+          }
+        } catch {
+          // Bỏ qua lỗi DB nếu Identity DB đang offline
         }
       }
 
@@ -121,15 +125,19 @@ export function maintenanceGuard(options?: MaintenanceGuardOptions) {
 
         // Permission bypass
         if (user.roleId) {
-          const userPermissions =
-            await permissionCacheService.getRolePermissions(user.roleId);
-          req.user.permissions = Array.from(userPermissions);
+          try {
+            const userPermissions =
+              await permissionCacheService.getRolePermissions(user.roleId);
+            req.user.permissions = Array.from(userPermissions);
 
-          const hasBypassPermission = bypassPermissions.some((perm) =>
-            userPermissions.has(perm),
-          );
-          if (hasBypassPermission) {
-            return next();
+            const hasBypassPermission = bypassPermissions.some((perm) =>
+              userPermissions.has(perm),
+            );
+            if (hasBypassPermission) {
+              return next();
+            }
+          } catch {
+            // Nếu không thể tải permissions từ DB, bỏ qua permission bypass và kiểm tra tiếp role/IP bypass bên dưới
           }
         }
       }

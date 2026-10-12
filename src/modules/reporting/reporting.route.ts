@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { ReportingController } from "./reporting.controller";
 import { validate } from "../../middlewares/validate.middleware";
-import { authMiddleware } from "../../middlewares/auth.middleware";
+import { verifyJwtLocally } from "../../middlewares/verify-jwt-locally.middleware";
 import { requirePermission } from "../../middlewares/permission.middleware";
 import { PERMISSIONS } from "../../common/constants/permission.constant";
 import {
@@ -28,7 +28,7 @@ const controller = new ReportingController();
 
 // ── 1. Statistics & Dashboard Routes (/api/v1/statistics) ────────────────────
 
-statisticRouter.use(authMiddleware);
+statisticRouter.use(verifyJwtLocally);
 
 statisticRouter.get(
   "/summary",
@@ -81,7 +81,7 @@ statisticRouter.post(
 
 // ── 2. Reports & Templates Routes (/api/v1/reports) ──────────────────────────
 
-reportRouter.use(authMiddleware);
+reportRouter.use(verifyJwtLocally);
 
 reportRouter.get(
   "/templates",
@@ -126,7 +126,7 @@ reportRouter.get(
 
 // ── 3. AI Models & Governance Routes (/api/v1/ai-models) ─────────────────────
 
-aiModelRouter.use(authMiddleware);
+aiModelRouter.use(verifyJwtLocally);
 
 aiModelRouter.get(
   "/",

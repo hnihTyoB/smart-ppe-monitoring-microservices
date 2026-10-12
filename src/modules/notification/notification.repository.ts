@@ -6,7 +6,6 @@ import {
   notificationPrisma,
   DEFAULT_NOTIFICATION_TRANSACTION_OPTIONS,
 } from "../../database/notification.client";
-import { prisma as identityPrisma } from "../../database/prisma.client";
 import {
   NOTIFICATION_TYPE,
   NOTIFICATION_STATUS,
@@ -22,6 +21,11 @@ import {
 } from "../../common/helpers/pagination.helper";
 import { isUuid } from "../../common/helpers/uuid.helper";
 import { buildTsQuery } from "../../common/helpers/fts.helper";
+import { rbacRepository } from "../rbac/rbac.repository";
+import {
+  AuditAction,
+  AuditTargetType,
+} from "../../common/constants/audit-log.constant";
 import {
   ListNotificationsDto,
   ListEmailsDto,
@@ -640,8 +644,8 @@ export class NotificationRepository {
 
   async createAuditLog(params: {
     actorId?: string;
-    action: string;
-    targetType: string;
+    action: AuditAction;
+    targetType: AuditTargetType;
     targetId?: string;
     details?: Record<string, unknown>;
     ipAddress?: string;
@@ -649,19 +653,20 @@ export class NotificationRepository {
   }) {
     if (!params.actorId || !isUuid(params.actorId)) return null;
     try {
-      return await identityPrisma.auditLog.create({
-        data: {
-          actorId: params.actorId,
-          action: params.action,
-          targetType: params.targetType,
-          targetId: params.targetId || "",
-          details: (params.details as any) || undefined,
-          ipAddress: params.ipAddress || null,
-          userAgent: params.userAgent || null,
-        },
+      return await rbacRepository.createAuditLog({
+        actorId: params.actorId,
+        action: params.action,
+        targetType: params.targetType,
+        targetId: params.targetId || "",
+        details: params.details,
+        ipAddress: params.ipAddress,
+        userAgent: params.userAgent,
       });
-    } catch (err: any) {
-      console.warn("[AuditLog] Failed to record event:", err?.message || err);
+    } catch (err: unknown) {
+      console.warn(
+        "[AuditLog] Failed to record event via rbacRepository:",
+        (err as Error)?.message || err,
+      );
       return null;
     }
   }

@@ -16,6 +16,7 @@ import { rateLimitMiddleware } from "./middlewares/rate-limit.middleware";
 import { requestIdMiddleware } from "./middlewares/request-id.middleware";
 import { maintenanceGuard } from "./middlewares/maintenance.middleware";
 import { envConfig } from "./config/env.config";
+import { reportingRepository } from "./modules/reporting/reporting.repository";
 
 /**
  * Express Application cho Reporting & Analytics Microservice (:8894)
@@ -84,16 +85,23 @@ reportingApp.use(express.urlencoded({ extended: true, limit: "2mb" }));
 reportingApp.use(cookieParser());
 
 // 3. Health check endpoints cho Traefik Gateway & Monitoring
-const healthHandler = (_req: express.Request, res: express.Response) => {
-  res.status(200).json({
-    status: "ok",
+const healthHandler = async (_req: express.Request, res: express.Response) => {
+  const isHealthy = await reportingRepository.checkDatabaseHealth();
+  const dbStatus = isHealthy ? "up" : "down";
+
+  res.status(isHealthy ? 200 : 503).json({
+    status: isHealthy ? "ok" : "degraded",
     service: "reporting-service",
+    checks: {
+      database: dbStatus,
+    },
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
   });
 };
 
 reportingApp.get("/health", healthHandler);
+reportingApp.get("/health/live", (_req, res) => res.status(200).json({ status: "ok" }));
 reportingApp.get("/api/v1/reports/health", healthHandler);
 reportingApp.get("/reports/health", healthHandler);
 reportingApp.get("/api/v1/statistics/health", healthHandler);

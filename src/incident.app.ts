@@ -16,6 +16,7 @@ import { requestIdMiddleware } from "./middlewares/request-id.middleware";
 import { timeoutMiddleware } from "./middlewares/timeout.middleware";
 import { maintenanceGuard } from "./middlewares/maintenance.middleware";
 import { envConfig } from "./config/env.config";
+import { incidentRepository } from "./modules/incident/incident.repository";
 
 /**
  * Express Application cho Incident Management Microservice (:8893)
@@ -84,16 +85,23 @@ incidentApp.use(express.urlencoded({ extended: true, limit: "2mb" }));
 incidentApp.use(cookieParser());
 
 // 3. Health check endpoints cho Traefik Gateway & Monitoring
-const healthHandler = (_req: express.Request, res: express.Response) => {
-  res.status(200).json({
-    status: "ok",
+const healthHandler = async (_req: express.Request, res: express.Response) => {
+  const isHealthy = await incidentRepository.checkDatabaseHealth();
+  const dbStatus = isHealthy ? "up" : "down";
+
+  res.status(isHealthy ? 200 : 503).json({
+    status: isHealthy ? "ok" : "degraded",
     service: "incident-service",
+    checks: {
+      database: dbStatus,
+    },
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
   });
 };
 
 incidentApp.get("/health", healthHandler);
+incidentApp.get("/health/live", (_req, res) => res.status(200).json({ status: "ok" }));
 incidentApp.get("/api/v1/incidents/health", healthHandler);
 incidentApp.get("/incidents/health", healthHandler);
 

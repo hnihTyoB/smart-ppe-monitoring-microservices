@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { safetyRuleController } from "./safety-rule.controller";
-import { authMiddleware } from "../../middlewares/auth.middleware";
+import { verifyJwtLocally } from "../../middlewares/verify-jwt-locally.middleware";
 import { requirePermission } from "../../middlewares/permission.middleware";
 import { validate } from "../../middlewares/validate.middleware";
 import {
@@ -19,7 +19,7 @@ const controller = safetyRuleController;
 // ── 1. System Default ────────────────────────────────────────────────────────
 router.get(
   "/system-default",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_SAFETY_CONFIG_READ),
   controller.getSystemDefault,
 );
@@ -27,7 +27,7 @@ router.get(
 // ── 2. Effective Configuration Resolution (Dành cho AI Pipeline & UI) ─────────
 router.get(
   "/effective",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_SAFETY_CONFIG_READ),
   validate(effectiveSafetyConfigQuerySchema, "query"),
   controller.getEffectiveConfig,
@@ -36,7 +36,7 @@ router.get(
 // ── 3. Site Safety Config ────────────────────────────────────────────────────
 router.get(
   "/sites/:siteId",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_SAFETY_CONFIG_READ),
   validate(siteIdParamSchema, "params"),
   controller.getSiteSafetyConfig,
@@ -44,7 +44,7 @@ router.get(
 
 router.put(
   "/sites/:siteId",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_SAFETY_CONFIG_MANAGE),
   validate(siteIdParamSchema, "params"),
   validate(updateSiteSafetyConfigSchema),
@@ -54,7 +54,7 @@ router.put(
 // ── 4. Camera Safety Config Overrides ────────────────────────────────────────
 router.get(
   "/cameras/:cameraId",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_SAFETY_CONFIG_READ),
   validate(cameraIdParamSchema, "params"),
   controller.getCameraSafetyConfig,
@@ -62,7 +62,7 @@ router.get(
 
 router.put(
   "/cameras/:cameraId",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_SAFETY_CONFIG_MANAGE),
   validate(cameraIdParamSchema, "params"),
   validate(updateCameraSafetyConfigSchema),
@@ -71,7 +71,7 @@ router.put(
 
 router.delete(
   "/cameras/:cameraId",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_SAFETY_CONFIG_MANAGE),
   validate(cameraIdParamSchema, "params"),
   controller.deleteCameraSafetyConfig,
@@ -80,7 +80,7 @@ router.delete(
 // ── 5. Cache Invalidation ────────────────────────────────────────────────────
 router.post(
   "/cache/invalidate",
-  authMiddleware,
+  verifyJwtLocally,
   requirePermission(PERMISSIONS.PPE_SAFETY_CONFIG_MANAGE),
   validate(invalidateCacheSchema),
   controller.invalidateCache,

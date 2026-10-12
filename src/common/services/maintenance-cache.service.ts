@@ -1,7 +1,13 @@
 import { MaintenanceConfig } from "@prisma/client";
 import IORedis from "ioredis";
 import { envConfig } from "../../config/env.config";
-import { MAINTENANCE_PUBSUB_CHANNEL } from "../constants/maintenance.constant";
+import {
+  MAINTENANCE_PUBSUB_CHANNEL,
+  MAINTENANCE_STATUS,
+  DEFAULT_MAINTENANCE_CONFIG,
+} from "../constants/maintenance.constant";
+import { PERMISSIONS } from "../constants/permission.constant";
+import { ROLES } from "../constants/role.constant";
 import { maintenanceRepository } from "../../modules/maintenance/maintenance.repository";
 
 interface CacheEntry {
@@ -98,14 +104,46 @@ export class MaintenanceCacheService {
       return this.cache.config;
     }
 
-    const config = await maintenanceRepository.getOrCreateDefaultConfig(key);
+    try {
+      const config = await maintenanceRepository.getOrCreateDefaultConfig(key);
 
-    this.cache = {
-      config,
-      expiresAt: now + this.TTL_MS,
-    };
+      this.cache = {
+        config,
+        expiresAt: now + this.TTL_MS,
+      };
 
-    return config;
+      return config;
+    } catch (err: unknown) {
+      console.warn(
+        `[MaintenanceCacheService] Failed to fetch maintenance config from DB: ${(err as Error)?.message || err}. Fallback to default in-memory config.`,
+      );
+      const fallbackConfig: MaintenanceConfig = {
+        id: "default-memory",
+        key,
+        enabled: DEFAULT_MAINTENANCE_CONFIG.enabled,
+        status: MAINTENANCE_STATUS.ONLINE,
+        title: DEFAULT_MAINTENANCE_CONFIG.title,
+        message: DEFAULT_MAINTENANCE_CONFIG.message,
+        bypassPermissions: [
+          PERMISSIONS.MAINTENANCE_MANAGE,
+          PERMISSIONS.MAINTENANCE_BYPASS,
+        ],
+        bypassRoles: [ROLES.ADMIN],
+        bypassIps: [],
+        metadata: null,
+        startAt: null,
+        estimatedEndAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      this.cache = {
+        config: fallbackConfig,
+        expiresAt: now + 30 * 1000, // Retry sau 30 giây
+      };
+
+      return fallbackConfig;
+    }
   }
 
   set(config: MaintenanceConfig): void {

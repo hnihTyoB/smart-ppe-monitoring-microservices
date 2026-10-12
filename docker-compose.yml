@@ -50,6 +50,9 @@ services:
       - "traefik.http.routers.dashboard.middlewares=dashboard-auth"
       # Basic auth cho dashboard: admin/admin (chỉ dev — trong prod dùng .env)
       - "traefik.http.middlewares.dashboard-auth.basicauth.users=admin:$$apr1$$xyz$$placeholder"
+      # Inject secret nội bộ x-gateway-secret từ environment vào request tới microservices
+      - "traefik.http.middlewares.inject-gateway-secret.headers.customrequestheaders.x-gateway-secret=${GATEWAY_INTERNAL_SECRET:-}"
+      - "traefik.http.middlewares.inject-gateway-secret.headers.customrequestheaders.x-gateway=Traefik-v3"
     healthcheck:
       test: ["CMD", "traefik", "healthcheck", "--ping"]
       interval: 30s
@@ -279,6 +282,218 @@ services:
       - "traefik.http.services.media.loadbalancer.healthcheck.interval=30s"
       # ── Middleware chain ──────────────────────────────────────────────────
       - "traefik.http.routers.media.middlewares=security-headers@file,global-ratelimit@file,request-id@file,inject-gateway-secret"
+
+  # ── Layer 2e: Site Microservice (:8891) ──────────────────────────────────
+  site-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: site_service
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: "${NODE_ENV:-production}"
+      PORT: "${SITE_PORT:-8891}"
+      SITE_DATABASE_URL: "${SITE_DATABASE_URL}"
+      REDIS_URL: ""
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
+      TRUST_PROXY: "1"
+      GATEWAY_INTERNAL_SECRET: "${GATEWAY_INTERNAL_SECRET:-}"
+      AUTH_JWKS_URL: "http://app-api:9999/.well-known/jwks.json"
+    volumes:
+      - ./keys:/app/keys:ro
+    expose:
+      - "${SITE_PORT:-8891}"
+    depends_on:
+      redis:
+        condition: service_healthy
+      traefik:
+        condition: service_healthy
+    networks:
+      - internal_net
+    command: ["node", "dist/site.server.js"]
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'node -e "require(''http'').get(''http://localhost:${SITE_PORT:-8891}/health'', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on(''error'', () => process.exit(1))"',
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=internal_net"
+      - "traefik.http.routers.sites.rule=PathPrefix(`/api/v1/sites`) || PathPrefix(`/api/v1/zones`) || PathPrefix(`/api/v1/restricted-areas`) || PathPrefix(`/api/v1/safety-rules`)"
+      - "traefik.http.routers.sites.priority=100"
+      - "traefik.http.routers.sites.entrypoints=web,websecure"
+      - "traefik.http.services.sites.loadbalancer.server.port=${SITE_PORT:-8891}"
+      - "traefik.http.services.sites.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.sites.loadbalancer.healthcheck.interval=30s"
+      - "traefik.http.routers.sites.middlewares=security-headers@file,global-ratelimit@file,request-id@file,inject-gateway-secret"
+
+  # ── Layer 2f: Camera Microservice (:8892) ────────────────────────────────
+  camera-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: camera_service
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: "${NODE_ENV:-production}"
+      PORT: "${CAMERA_PORT:-8892}"
+      CAMERA_DATABASE_URL: "${CAMERA_DATABASE_URL}"
+      REDIS_URL: ""
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
+      TRUST_PROXY: "1"
+      GATEWAY_INTERNAL_SECRET: "${GATEWAY_INTERNAL_SECRET:-}"
+      AUTH_JWKS_URL: "http://app-api:9999/.well-known/jwks.json"
+    volumes:
+      - ./keys:/app/keys:ro
+    expose:
+      - "${CAMERA_PORT:-8892}"
+    depends_on:
+      redis:
+        condition: service_healthy
+      traefik:
+        condition: service_healthy
+    networks:
+      - internal_net
+    command: ["node", "dist/camera.server.js"]
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'node -e "require(''http'').get(''http://localhost:${CAMERA_PORT:-8892}/health'', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on(''error'', () => process.exit(1))"',
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=internal_net"
+      - "traefik.http.routers.cameras.rule=PathPrefix(`/api/v1/cameras`) || PathPrefix(`/api/v1/camera-streams`)"
+      - "traefik.http.routers.cameras.priority=100"
+      - "traefik.http.routers.cameras.entrypoints=web,websecure"
+      - "traefik.http.services.cameras.loadbalancer.server.port=${CAMERA_PORT:-8892}"
+      - "traefik.http.services.cameras.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.cameras.loadbalancer.healthcheck.interval=30s"
+      - "traefik.http.routers.cameras.middlewares=security-headers@file,global-ratelimit@file,request-id@file,inject-gateway-secret"
+
+  # ── Layer 2g: Incident Microservice (:8893) ──────────────────────────────
+  incident-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: incident_service
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: "${NODE_ENV:-production}"
+      PORT: "${INCIDENT_PORT:-8893}"
+      INCIDENT_DATABASE_URL: "${INCIDENT_DATABASE_URL}"
+      REDIS_URL: ""
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
+      TRUST_PROXY: "1"
+      GATEWAY_INTERNAL_SECRET: "${GATEWAY_INTERNAL_SECRET:-}"
+      AUTH_JWKS_URL: "http://app-api:9999/.well-known/jwks.json"
+    volumes:
+      - ./keys:/app/keys:ro
+    expose:
+      - "${INCIDENT_PORT:-8893}"
+    depends_on:
+      redis:
+        condition: service_healthy
+      traefik:
+        condition: service_healthy
+    networks:
+      - internal_net
+    command: ["node", "dist/incident.server.js"]
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'node -e "require(''http'').get(''http://localhost:${INCIDENT_PORT:-8893}/health'', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on(''error'', () => process.exit(1))"',
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=internal_net"
+      - "traefik.http.routers.incidents.rule=PathPrefix(`/api/v1/incidents`) || PathPrefix(`/api/v1/evidences`)"
+      - "traefik.http.routers.incidents.priority=100"
+      - "traefik.http.routers.incidents.entrypoints=web,websecure"
+      - "traefik.http.services.incidents.loadbalancer.server.port=${INCIDENT_PORT:-8893}"
+      - "traefik.http.services.incidents.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.incidents.loadbalancer.healthcheck.interval=30s"
+      - "traefik.http.routers.incidents.middlewares=security-headers@file,global-ratelimit@file,request-id@file,inject-gateway-secret"
+
+  # ── Layer 2h: Reporting Microservice (:8894) ─────────────────────────────
+  reporting-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: reporting_service
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: "${NODE_ENV:-production}"
+      PORT: "${REPORTING_PORT:-8894}"
+      REPORTING_DATABASE_URL: "${REPORTING_DATABASE_URL}"
+      REDIS_URL: ""
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
+      TRUST_PROXY: "1"
+      GATEWAY_INTERNAL_SECRET: "${GATEWAY_INTERNAL_SECRET:-}"
+      AUTH_JWKS_URL: "http://app-api:9999/.well-known/jwks.json"
+    volumes:
+      - ./keys:/app/keys:ro
+    expose:
+      - "${REPORTING_PORT:-8894}"
+    depends_on:
+      redis:
+        condition: service_healthy
+      traefik:
+        condition: service_healthy
+    networks:
+      - internal_net
+    command: ["node", "dist/reporting.server.js"]
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'node -e "require(''http'').get(''http://localhost:${REPORTING_PORT:-8894}/health'', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on(''error'', () => process.exit(1))"',
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=internal_net"
+      - "traefik.http.routers.reporting.rule=PathPrefix(`/api/v1/reports`) || PathPrefix(`/api/v1/statistics`) || PathPrefix(`/api/v1/ai-models`)"
+      - "traefik.http.routers.reporting.priority=100"
+      - "traefik.http.routers.reporting.entrypoints=web,websecure"
+      - "traefik.http.services.reporting.loadbalancer.server.port=${REPORTING_PORT:-8894}"
+      - "traefik.http.services.reporting.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.reporting.loadbalancer.healthcheck.interval=30s"
+      - "traefik.http.routers.reporting.middlewares=security-headers@file,global-ratelimit@file,request-id@file,inject-gateway-secret"
 
 networks:
   # Network expose ra ngoài (Traefik <-> Internet)

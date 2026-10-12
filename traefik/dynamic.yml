@@ -39,10 +39,12 @@ http:
           X-Gateway: "Traefik-v3" # Traefik tự sinh UUIDv4 nếu client chưa gửi
 
     # ── 4. Gateway Secret Injection ───────────────────────────────────────────
+    # Được inject động thông qua Docker labels: traefik.http.middlewares.inject-gateway-secret...
+    # dynamic.yml chỉ giữ định nghĩa an toàn chống override
     inject-gateway-secret:
       headers:
         customRequestHeaders:
-          X-Gateway-Secret: "PLACEHOLDER_REPLACE_AT_DEPLOY"
+          X-Gateway: "Traefik-v3"
 
     # ── 5. Compress Response ──────────────────────────────────────────────────
     compress-response:
