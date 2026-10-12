@@ -111,7 +111,7 @@ services:
         condition: service_healthy
     networks:
       - internal_net
-    command: ["node", "dist/api.server.js"]
+    command: ["node", "dist/identity.server.js"]
     healthcheck:
       test:
         [

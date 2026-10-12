@@ -1,8 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { handleApiShutdown } from "../src/api.server";
+import { handleApiShutdown } from "../src/identity.server";
 import { startWorkerProcess, handleWorkerShutdown } from "../src/worker.server";
-import app from "../src/app";
+import app from "../src/identity.app";
 
 describe("Microservices Phase 1: Process Decoupling Test Suite", () => {
   describe("1. API Server Process Verification", () => {
